@@ -46,10 +46,10 @@ materialID = 'NEl1'
 Rho_Inc = 1.12e-06
 Rho_Matrix = 1.12e-06
 
-C10_Inc = 400/100.0
+C10_Inc = 400/2.0
 C10_Matrix = 400.0
 
-D1_Inc = 0.0011429*100.0
+D1_Inc = 0.0011429*2.0
 D1_Matrix = 0.0011429
 
 E_m  = 70000.0
