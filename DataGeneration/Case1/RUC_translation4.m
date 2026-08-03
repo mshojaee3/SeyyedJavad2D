@@ -1,184 +1,170 @@
 clear; clc; close all;
 
-% Root directory = folder of this script
+% ============================================================
+%  Run_LE_Ensemble.m
+%  Drives Main2D_LE.py over a grid of inclusion translations,
+%  for a library of linear-elastic load cases (1% strain,
+%  single step, single increment).
+%
+%  Output: ONE ensemble CSV per load case
+%          <avgDir>/<LoadCase>_ensemble.csv
+%  plus    <avgDir>/Ensemble_Summary.csv  (energy + reactions)
+% ============================================================
+
 rootDir = fileparts(mfilename("fullpath"));
 addpath(rootDir);
 
-% Packages
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-pkgDir  = fullfile(rootDir, "+AllFunctions");
+% ------------------------------------------------------------
+% helper package
+% ------------------------------------------------------------
+pkgDir = fullfile(rootDir, "+AllFunctions");
 if ~exist(pkgDir,"dir"); mkdir(pkgDir); end
 
 U = "https://raw.githubusercontent.com/mshojaee3/AllFunctionsPub/main/";
 F = ["Mat_5A_safeCleanRunDir.m"; ...
      "Mat_7A_updatePyFromParams.m"];
-
 arrayfun(@(f) websave(fullfile(pkgDir,f), U+f), F, 'UniformOutput', false);
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % ------------------------------------------------------------
 % paths
 % ------------------------------------------------------------
-srcPy  = fullfile(rootDir, "Main2D_II.py");
-runDir = fullfile(rootDir, "AbaqusSimulation");
-outDir = fullfile(rootDir, "Translated_RUC_AllFrames_CSV");
+srcPy     = fullfile(rootDir, "Main2D_LE.py");
+runDir    = fullfile(rootDir, "AbaqusSimulation");
+rawDir    = fullfile(rootDir, "LE_Raw_CSV");
+energyDir = fullfile(rootDir, "LE_Energy_CSV");
 
-if ~exist(runDir,'dir')
-    mkdir(runDir);
-end
-if ~exist(outDir,'dir')
-    mkdir(outDir);
-end
-
-% ------------------------------------------------------------
-% geometry parameters
-% IMPORTANT: these must match the values inside Main2D_II.py
-% ------------------------------------------------------------
-geom = struct();
-geom.Lx = 1.0;
-geom.Ly = 1.0;
-geom.Nx = 6;
-geom.Ny = 6;
-
-% ------------------------------------------------------------
-% output folders that depend on RUC number
-% ------------------------------------------------------------
-energyFolderName = sprintf('Translated_RUC_Energy_%dx%d', geom.Nx, geom.Ny);
-energyDir = fullfile(rootDir, energyFolderName);
-if ~exist(energyDir,'dir')
-    mkdir(energyDir);
+assert(isfile(srcPy), 'Python template not found: %s', srcPy);
+for d = [runDir, rawDir, energyDir]
+    if ~exist(d,'dir'); mkdir(d); end
 end
 
-avgFolderName = sprintf('Translated_RUC_Ensemble_%dx%d', geom.Nx, geom.Ny);
-avgDir = fullfile(rootDir, avgFolderName);
-if ~exist(avgDir,'dir')
-    mkdir(avgDir);
-end
+% ------------------------------------------------------------
+% geometry / loading parameters (must be pushed into python)
+% ------------------------------------------------------------
+geom          = struct();
+geom.Lx       = 1.0;
+geom.Ly       = 1.0;
+geom.Nx       = 1;
+geom.Ny       = 1;
+geom.Rfrac    = 0.30;
+geom.meshFrac = 0.05;
 
-% Inclusion radius
-R = 0.3 * geom.Lx;
+strain0 = 0.01;          % 1 percent
+
+Lx_tot = geom.Nx * geom.Lx;
+Ly_tot = geom.Ny * geom.Ly;
+R      = geom.Rfrac * geom.Lx;
+
+avgDir = fullfile(rootDir, sprintf('LE_Ensemble_%dx%d', geom.Nx, geom.Ny));
+if ~exist(avgDir,'dir'); mkdir(avgDir); end
 
 % ------------------------------------------------------------
-% load cases
+% load case library  (names MUST match buildLoadCase in the .py)
 % ------------------------------------------------------------
 loadCaseList = { ...
-    'PureBending'; ...
-    'TensionBiaxial'; ...
-    'CompressiveUniaxial'; ...
-    'CompressiveBiaxial'; ...
-    'SimpleShear'; ...
-    'PureShear'; ...
-    'ParabolicBending'; ...
-    'TensionUniaxial'; ...
+    'UniaxialX'; ...
+    'UniaxialY'; ...
+    'CompressionX'; ...
+    'CompressionY'; ...
+    'BiaxialTension'; ...
+    'BiaxialCompression'; ...
+    'BiaxialUnequal'; ...
+    'PureShearNormal'; ...
+    'SimpleShearXY'; ...
+    'SimpleShearYX'; ...
+    'PureShearSym'; ...
+    'RotationShear'; ...
+    'CombinedTensionShear'; ...
+    'CombinedBiaxialShear'; ...
+    'PureBendingX'; ...
+    'PureBendingY'; ...
+    'ShearGradientX'; ...
+    'ShearGradientY'; ...
+    'StretchGradientX'; ...
+    'StretchGradientY'; ...
+    'DilatationGradient'; ...
+    'TensionPlusBending'; ...
+    'ShearPlusBending'; ...
+    'BiaxialPlusShearGradient'; ...
+    'GeneralMixed'; ...
+    'FreeUniaxialX'; ...
+    'FreeUniaxialY'; ...
+    'FreeCompressionY'; ...
+    'FreeSimpleShear'; ...
 };
 
 % ------------------------------------------------------------
-% translation settings
-% marginFrac = required remaining gap between inclusion edge
-% and RUC boundary, measured as fraction of RUC length
+% translation grid
 % ------------------------------------------------------------
-marginFrac = 0.05;   % marginFrac = 0.05  --> remaining gap = 5% of L
-stepFrac   = 0.05;   % translation step = 5% of each RUC length
+marginFrac = 0.05;
+stepFrac   = 0.05;
 
-% critical translations
 zeta1Critical = geom.Lx/2 - R - marginFrac*geom.Lx;
 zeta2Critical = geom.Ly/2 - R - marginFrac*geom.Ly;
-
 if zeta1Critical < 0 || zeta2Critical < 0
-    error(['Critical translation is negative. ' ...
-           'The inclusion is too large or the chosen margin is too large.']);
+    error('Critical translation is negative: inclusion or margin too large.');
 end
 
 stepX = stepFrac * geom.Lx;
 stepY = stepFrac * geom.Ly;
-
 zeta1Vals = -zeta1Critical : stepX : zeta1Critical;
 zeta2Vals = -zeta2Critical : stepY : zeta2Critical;
 
-% ------------------------------------------------------------
-% translation mode
-% 1 = diagonal only
-% 2 = full grid
-% 3 = cross only (center + right/left/up/down)
-% ------------------------------------------------------------
+% 1 = diagonal, 2 = full grid, 3 = cross
 translationMode = 2;
 
-% ------------------------------------------------------------
-% build run list
-% ------------------------------------------------------------
 runList = [];
-
-if translationMode == 1
-    nDiag = min(numel(zeta1Vals), numel(zeta2Vals));
-    for i = 1:nDiag
-        runList = [runList; zeta1Vals(i), zeta2Vals(i)];
-    end
-
-elseif translationMode == 2
-    for i = 1:numel(zeta1Vals)
-        for j = 1:numel(zeta2Vals)
-            runList = [runList; zeta1Vals(i), zeta2Vals(j)];
+switch translationMode
+    case 1
+        nDiag = min(numel(zeta1Vals), numel(zeta2Vals));
+        for i = 1:nDiag
+            runList = [runList; zeta1Vals(i), zeta2Vals(i)]; %#ok<AGROW>
         end
-    end
-
-elseif translationMode == 3
-    runList = [0, 0];
-
-    % right
-    for s = stepX:stepX:zeta1Critical
-        runList = [runList; s, 0];
-    end
-
-    % left
-    for s = stepX:stepX:zeta1Critical
-        runList = [runList; -s, 0];
-    end
-
-    % up
-    for s = stepY:stepY:zeta2Critical
-        runList = [runList; 0, s];
-    end
-
-    % down
-    for s = stepY:stepY:zeta2Critical
-        runList = [runList; 0, -s];
-    end
-
-else
-    error('Unknown translationMode.');
+    case 2
+        for i = 1:numel(zeta1Vals)
+            for j = 1:numel(zeta2Vals)
+                runList = [runList; zeta1Vals(i), zeta2Vals(j)]; %#ok<AGROW>
+            end
+        end
+    case 3
+        runList = [0, 0];
+        for s = stepX:stepX:zeta1Critical
+            runList = [runList; s, 0; -s, 0]; %#ok<AGROW>
+        end
+        for s = stepY:stepY:zeta2Critical
+            runList = [runList; 0, s; 0, -s]; %#ok<AGROW>
+        end
+    otherwise
+        error('Unknown translationMode.');
 end
 
-fprintf('\nCritical translations:\n');
-fprintf('zeta1Critical = %.4f\n', zeta1Critical);
-fprintf('zeta2Critical = %.4f\n', zeta2Critical);
-fprintf('Total runs      = %d\n', size(runList,1));
+fprintf('\nzeta1Critical = %.4f, zeta2Critical = %.4f\n', zeta1Critical, zeta2Critical);
+fprintf('Translations per load case = %d\n', size(runList,1));
+fprintf('Load cases = %d, total jobs = %d\n', numel(loadCaseList), ...
+        numel(loadCaseList)*size(runList,1));
 
 % ------------------------------------------------------------
-% Abaqus path
+% Abaqus
 % ------------------------------------------------------------
 abaqusBat = 'C:\SIMULIA\Commands\abaqus.bat';
 assert(isfile(abaqusBat), 'abaqusBat does not exist: %s', abaqusBat);
 
 % ------------------------------------------------------------
-% ensemble averaging settings
+% ensemble grid
 % ------------------------------------------------------------
 Ngx = 120;
 Ngy = 120;
-
-Lx_tot = geom.Nx * geom.Lx;
-Ly_tot = geom.Ny * geom.Ly;
-
 x_grid = linspace(0, Lx_tot, Ngx);
 y_grid = linspace(0, Ly_tot, Ngy);
 [Xg, Yg] = meshgrid(x_grid, y_grid);
 
-% ------------------------------------------------------------
-% loop over translations
-% averaging is done immediately after each load case finishes
-% ------------------------------------------------------------
+summaryRows = {};
+
+% ============================================================
+% MAIN LOOP
+% ============================================================
 nCases = numel(loadCaseList);
 nRuns  = size(runList,1);
-totalJobs = nCases * nRuns;
 jobCounter = 0;
 
 for c = 1:nCases
@@ -186,263 +172,191 @@ for c = 1:nCases
     loadCaseName = loadCaseList{c};
 
     fprintf('\n##################################################\n');
-    fprintf('Starting load case %d / %d : %s\n', c, nCases, loadCaseName);
+    fprintf('Load case %d / %d : %s\n', c, nCases, loadCaseName);
     fprintf('##################################################\n');
 
     for k = 1:nRuns
 
         jobCounter = jobCounter + 1;
-
         z1 = runList(k,1);
         z2 = runList(k,2);
 
-        fprintf('\n========================================\n');
-        fprintf('Global job %d / %d\n', jobCounter, totalJobs);
-        fprintf('Load case   : %s\n', loadCaseName);
-        fprintf('Run %d / %d\n', k, nRuns);
-        fprintf('zeta1 = %.4f, zeta2 = %.4f\n', z1, z2);
-        fprintf('========================================\n');
+        fprintf('\n[%d / %d] %s   zeta = (%.4f, %.4f)\n', ...
+                jobCounter, nCases*nRuns, loadCaseName, z1, z2);
 
-        % clean working directory
         AllFunctions.Mat_5A_safeCleanRunDir(runDir);
 
-        % parameters to overwrite in python template
-        params = struct();
+        params              = struct();
         params.Lx           = geom.Lx;
         params.Ly           = geom.Ly;
         params.NX           = geom.Nx;
         params.NY           = geom.Ny;
+        params.Rfrac        = geom.Rfrac;
+        params.meshFrac     = geom.meshFrac;
+        params.strain0      = strain0;
         params.zeta1        = z1;
         params.zeta2        = z2;
         params.loadCaseName = loadCaseName;
-        params.OUTDIR       = strrep(outDir, '\', '/');
+        params.OUTDIR       = strrep(rawDir,    '\', '/');
         params.ENERGYDIR    = strrep(energyDir, '\', '/');
 
-        updatedPy = fullfile(runDir, "Main2D_II_updated.py");
-
-        % create updated python file
+        updatedPy = fullfile(runDir, "Main2D_LE_updated.py");
         AllFunctions.Mat_7A_updatePyFromParams(params, srcPy, updatedPy);
 
-        % log file name per load case and translation
         logFile = fullfile(runDir, sprintf('log_%s_zx_%0.3f_zy_%0.3f.txt', ...
-            loadCaseName, z1, z2));
-        logFile = strrep(logFile, '.', 'p');
-        logFile = strrep(logFile, '-', 'm');
+                           loadCaseName, z1, z2));
+        logFile = strrep(strrep(logFile, '.', 'p'), '-', 'm');
 
-        % run Abaqus directly
-        cmd = sprintf(['cd /d "%s" && ' ...
-                       'call "%s" cae noGUI="%s" > "%s" 2>&1'], ...
+        cmd = sprintf(['cd /d "%s" && call "%s" cae noGUI="%s" > "%s" 2>&1'], ...
                        runDir, abaqusBat, updatedPy, logFile);
-
-        disp("CMD = " + string(cmd));
-
         status = system(cmd);
 
         if status ~= 0
-            error(['Abaqus failed for load case %s, zeta1=%.4f, zeta2=%.4f.\n' ...
-                   'Check log file:\n%s'], ...
+            error(['Abaqus failed: %s, zeta = (%.4f, %.4f).\nSee log:\n%s'], ...
                    loadCaseName, z1, z2, logFile);
         end
     end
 
-    fprintf('\nFinished all translations for load case: %s\n', loadCaseName);
-    fprintf('Starting ensemble averaging immediately for this load case...\n');
-
     % --------------------------------------------------------
-    % average this load case now
+    % ENSEMBLE AVERAGE -> one CSV for this load case
     % --------------------------------------------------------
-    caseRawDir = fullfile(outDir, loadCaseName);
-    caseAvgDir = fullfile(avgDir, loadCaseName);
-
-    if ~exist(caseRawDir, 'dir')
-        warning('Raw folder does not exist: %s', caseRawDir);
-        continue;
+    caseRawDir = fullfile(rawDir, loadCaseName);
+    if ~exist(caseRawDir,'dir')
+        warning('Raw folder missing: %s', caseRawDir); continue;
     end
 
-    if ~exist(caseAvgDir, 'dir')
-        mkdir(caseAvgDir);
+    fileList = dir(fullfile(caseRawDir, '*_Nodal.csv'));
+    Nfiles = numel(fileList);
+    if Nfiles == 0
+        warning('No nodal CSV found in %s', caseRawDir); continue;
     end
+    fprintf('\nAveraging %d translations for %s ...\n', Nfiles, loadCaseName);
 
-    % find all raw csv files of this load case
-    fileList = dir(fullfile(caseRawDir, '*.csv'));
+    % fields carried through the ensemble average
+    fieldNames = {'U1','U2','S11','S22','S33','S12','E11','E22','E33','E12'};
+    nF = numel(fieldNames);
 
-    if isempty(fileList)
-        warning('No CSV files found in %s', caseRawDir);
-        continue;
-    end
+    fSum  = repmat({zeros(Ngy, Ngx)}, 1, nF);
+    fSum2 = repmat({zeros(Ngy, Ngx)}, 1, nF);
 
-    % --------------------------------------------------------
-    % detect all frame IDs from filenames
-    % expects names like ..._f0000_Nodal.csv
-    % --------------------------------------------------------
-    frameIDs = [];
+    for k = 1:Nfiles
+        fname = fullfile(caseRawDir, fileList(k).name);
+        T = readtable(fname);
 
-    for k = 1:numel(fileList)
-        fname = fileList(k).name;
-        tok = regexp(fname, '_f(\d+)_Nodal\.csv$', 'tokens');
-        if ~isempty(tok)
-            frameIDs(end+1) = str2double(tok{1}{1});
-        end
-    end
+        bad = isnan(T.X) | isnan(T.Y) | isnan(T.U1) | isnan(T.U2);
+        T(bad,:) = [];
 
-    frameIDs = unique(frameIDs);
-
-    if isempty(frameIDs)
-        warning('No frame IDs detected in %s', caseRawDir);
-        continue;
-    end
-
-    fprintf('Found %d frame IDs for %s\n', numel(frameIDs), loadCaseName);
-
-    for iFrame = 1:numel(frameIDs)
-
-        frameID = frameIDs(iFrame);
-
-        fprintf('\nProcessing %s frame f%04d\n', loadCaseName, frameID);
-
-        % pattern to collect all translations of this frame
-        pattern = sprintf('*_f%04d_Nodal.csv', frameID);
-        frameFiles = dir(fullfile(caseRawDir, pattern));
-        Nfiles = numel(frameFiles);
-
-        if Nfiles == 0
-            warning('No files found for %s frame f%04d', loadCaseName, frameID);
-            continue;
-        end
-
-        fprintf('Found %d translation files for this frame.\n', Nfiles);
-
-        % allocate
-        U1_sum  = zeros(Ngy, Ngx);
-        U2_sum  = zeros(Ngy, Ngx);
-        U1_sum2 = zeros(Ngy, Ngx);
-        U2_sum2 = zeros(Ngy, Ngx);
-
-        stepTime_ref = NaN;
-
-        % ----------------------------------------------------
-        % loop over all translations of this frame
-        % ----------------------------------------------------
-        for k = 1:Nfiles
-
-            fname = fullfile(caseRawDir, frameFiles(k).name);
-            fprintf('  Reading %d / %d : %s\n', k, Nfiles, frameFiles(k).name);
-
-            T = readtable(fname);
-
-            if ismember('StepTime', T.Properties.VariableNames)
-                stepTime_ref = T.StepTime(1);
-            end
-
-            bad = isnan(T.X) | isnan(T.Y) | isnan(T.U1) | isnan(T.U2);
-            T(bad,:) = [];
-
-            x  = T.X;
-            y  = T.Y;
-            u1 = T.U1;
-            u2 = T.U2;
-
-            U1k = griddata(x, y, u1, Xg, Yg, 'linear');
-            U2k = griddata(x, y, u2, Xg, Yg, 'linear');
-
-            nanmask = isnan(U1k) | isnan(U2k);
+        for q = 1:nF
+            vq = T.(fieldNames{q});
+            Vk = griddata(T.X, T.Y, vq, Xg, Yg, 'linear');
+            nanmask = isnan(Vk);
             if any(nanmask(:))
-                U1k(nanmask) = griddata(x, y, u1, Xg(nanmask), Yg(nanmask), 'nearest');
-                U2k(nanmask) = griddata(x, y, u2, Xg(nanmask), Yg(nanmask), 'nearest');
+                Vk(nanmask) = griddata(T.X, T.Y, vq, Xg(nanmask), Yg(nanmask), 'nearest');
             end
-
-            U1_sum  = U1_sum  + U1k;
-            U2_sum  = U2_sum  + U2k;
-            U1_sum2 = U1_sum2 + U1k.^2;
-            U2_sum2 = U2_sum2 + U2k.^2;
+            fSum{q}  = fSum{q}  + Vk;
+            fSum2{q} = fSum2{q} + Vk.^2;
         end
-
-        % ----------------------------------------------------
-        % ensemble mean and fluctuation
-        % ----------------------------------------------------
-        U1_bar = U1_sum / Nfiles;
-        U2_bar = U2_sum / Nfiles;
-
-        U1_var = U1_sum2 / Nfiles - U1_bar.^2;
-        U2_var = U2_sum2 / Nfiles - U2_bar.^2;
-
-        U1_var = max(U1_var, 0);
-        U2_var = max(U2_var, 0);
-
-        sigma1 = sqrt(U1_var);
-        sigma2 = sqrt(U2_var);
-
-        % ----------------------------------------------------
-        % deformation gradient from ensemble mean
-        % ----------------------------------------------------
-        dx = x_grid(2) - x_grid(1);
-        dy = y_grid(2) - y_grid(1);
-
-        [dU1_dX1, dU1_dX2] = gradient(U1_bar, dx, dy);
-        [dU2_dX1, dU2_dX2] = gradient(U2_bar, dx, dy);
-
-        F11 = 1 + dU1_dX1;
-        F12 =     dU1_dX2;
-        F21 =     dU2_dX1;
-        F22 = 1 + dU2_dX2;
-
-        J = F11 .* F22 - F12 .* F21;
-
-        % ----------------------------------------------------
-        % save ensemble csv
-        % ----------------------------------------------------
-        outname = fullfile(caseAvgDir, sprintf('%s_f%04d_u_bar.csv', loadCaseName, frameID));
-
-        fid = fopen(outname, 'w');
-        fprintf(fid, 'FrameID,StepTime,X,Y,U1_bar,U2_bar,sigma1,sigma2,F11,F12,F21,F22,J\n');
-
-        for iy = 1:Ngy
-            for ix = 1:Ngx
-                fprintf(fid, '%d,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n', ...
-                    frameID, stepTime_ref, ...
-                    Xg(iy,ix), Yg(iy,ix), ...
-                    U1_bar(iy,ix), U2_bar(iy,ix), ...
-                    sigma1(iy,ix), sigma2(iy,ix), ...
-                    F11(iy,ix), F12(iy,ix), F21(iy,ix), F22(iy,ix), J(iy,ix));
-            end
-        end
-        fclose(fid);
-
-        fprintf('Saved ensemble file: %s\n', outname);
     end
 
-    fprintf('Finished ensemble averaging for load case: %s\n', loadCaseName);
+    fBar = cell(1,nF);
+    fStd = cell(1,nF);
+    for q = 1:nF
+        fBar{q} = fSum{q} / Nfiles;
+        fStd{q} = sqrt(max(fSum2{q}/Nfiles - fBar{q}.^2, 0));
+    end
+
+    U1_bar = fBar{1};  U2_bar = fBar{2};
+    sigma1 = fStd{1};  sigma2 = fStd{2};
+
+    dx = x_grid(2) - x_grid(1);
+    dy = y_grid(2) - y_grid(1);
+    [dU1_dX1, dU1_dX2] = gradient(U1_bar, dx, dy);
+    [dU2_dX1, dU2_dX2] = gradient(U2_bar, dx, dy);
+
+    F11 = 1 + dU1_dX1;   F12 = dU1_dX2;
+    F21 = dU2_dX1;       F22 = 1 + dU2_dX2;
+    J   = F11.*F22 - F12.*F21;
+
+    % small-strain measure derived from the averaged displacement field
+    % (Eg* = gradient-derived, distinct from the FE strain Ebar_*)
+    Eg11 = dU1_dX1;
+    Eg22 = dU2_dX2;
+    Eg12 = 0.5*(dU1_dX2 + dU2_dX1);
+
+    % ---- assemble the output table column by column ----
+    colNames = {'X','Y','U1_bar','U2_bar','sigma_U1','sigma_U2', ...
+                'F11','F12','F21','F22','J','Eg11','Eg12','Eg22'};
+    colData  = {Xg, Yg, U1_bar, U2_bar, sigma1, sigma2, ...
+                F11, F12, F21, F22, J, Eg11, Eg12, Eg22};
+
+    for q = 3:nF   % S11..E12, skipping U1,U2 already written above
+        colNames{end+1} = [fieldNames{q} '_bar'];  %#ok<AGROW>
+        colData{end+1}  = fBar{q};                 %#ok<AGROW>
+        colNames{end+1} = ['sigma_' fieldNames{q}];%#ok<AGROW>
+        colData{end+1}  = fStd{q};                 %#ok<AGROW>
+    end
+
+    M = zeros(Ngy*Ngx, numel(colData));
+    for q = 1:numel(colData)
+        M(:,q) = reshape(colData{q}.', [], 1);   % row-major (iy outer, ix inner)
+    end
+
+    Tout = array2table(M, 'VariableNames', colNames);
+    Tout = addvars(Tout, repmat({loadCaseName}, Ngy*Ngx, 1), ...
+                         repmat(Nfiles, Ngy*Ngx, 1), ...
+                   'Before', 1, 'NewVariableNames', {'LoadCase','Nfiles'});
+
+    outname = fullfile(avgDir, sprintf('%s_ensemble.csv', loadCaseName));
+    writetable(Tout, outname);
+    fprintf('Saved ensemble file: %s\n', outname);
+
+    % --------------------------------------------------------
+    % average energy / reactions over translations
+    % --------------------------------------------------------
+    caseEnergyDir = fullfile(energyDir, loadCaseName);
+    sumFiles = dir(fullfile(caseEnergyDir, '*_Summary.csv'));
+    if ~isempty(sumFiles)
+        sumVars = {'ALLSE','RF_LEFT_x','RF_LEFT_y','RF_RIGHT_x','RF_RIGHT_y', ...
+                   'RF_BOTTOM_x','RF_BOTTOM_y','RF_TOP_x','RF_TOP_y','Volume', ...
+                   'Savg_11','Savg_22','Savg_33','Savg_12', ...
+                   'Eavg_11','Eavg_22','Eavg_33','Eavg_12','Uavg_1','Uavg_2'};
+        Sall = [];
+        for k = 1:numel(sumFiles)
+            Tk = readtable(fullfile(caseEnergyDir, sumFiles(k).name));
+            Sall = [Sall; Tk{1, sumVars}]; %#ok<AGROW>
+        end
+        row = [{loadCaseName, numel(sumFiles), mean(Sall(:,1)), std(Sall(:,1))}, ...
+               num2cell(mean(Sall(:,2:end), 1))];
+        summaryRows(end+1,:) = row; %#ok<AGROW>
+    end
 end
 
-fprintf('\nAll load cases, translations, and ensemble averaging finished.\n');
+% ============================================================
+% GLOBAL SUMMARY
+% ============================================================
+if ~isempty(summaryRows)
+    Tsum = cell2table(summaryRows, 'VariableNames', ...
+        {'LoadCase','Ntrans','ALLSE_mean','ALLSE_std', ...
+         'RF_LEFT_x','RF_LEFT_y','RF_RIGHT_x','RF_RIGHT_y', ...
+         'RF_BOTTOM_x','RF_BOTTOM_y','RF_TOP_x','RF_TOP_y','Volume', ...
+         'Savg_11','Savg_22','Savg_33','Savg_12', ...
+         'Eavg_11','Eavg_22','Eavg_33','Eavg_12','Uavg_1','Uavg_2'});
+    writetable(Tsum, fullfile(avgDir, 'Ensemble_Summary.csv'));
+    fprintf('\nSaved global summary: %s\n', fullfile(avgDir,'Ensemble_Summary.csv'));
+end
 
+fprintf('\nAll load cases finished.\n');
 
-
-
-%  optional figure for F components of the last saved data
-figure('Name','Last averaged F components', ...
-       'Position',[100 100 1000 800]);
-
+% ------------------------------------------------------------
+% quick check of the last load case
+% ------------------------------------------------------------
+figure('Name', ['Ensemble F: ' loadCaseName], 'Position',[100 100 1000 800]);
 tiledlayout(2,2,'TileSpacing','compact','Padding','compact');
-
-nexttile;
-imagesc(x_grid, y_grid, F11); axis xy equal tight; colorbar;
-xlabel('X_1'); ylabel('X_2');
-title('F_{11}');
-
-nexttile;
-imagesc(x_grid, y_grid, F12); axis xy equal tight; colorbar;
-xlabel('X_1'); ylabel('X_2');
-title('F_{12}');
-
-nexttile;
-imagesc(x_grid, y_grid, F21); axis xy equal tight; colorbar;
-xlabel('X_1'); ylabel('X_2');
-title('F_{21}');
-
-nexttile;
-imagesc(x_grid, y_grid, F22); axis xy equal tight; colorbar;
-xlabel('X_1'); ylabel('X_2');
-title('F_{22}');
-
-sgtitle(sprintf('Last averaged result: %s, frame f%04d', loadCaseName, frameID));
+comps = {F11, F12, F21, F22};
+names = {'F_{11}','F_{12}','F_{21}','F_{22}'};
+for q = 1:4
+    nexttile;
+    imagesc(x_grid, y_grid, comps{q}); axis xy equal tight; colorbar;
+    xlabel('X_1'); ylabel('X_2'); title(names{q});
+end
+sgtitle(sprintf('Ensemble average, load case: %s', loadCaseName), 'Interpreter','none');
