@@ -143,7 +143,7 @@ clear; clc;
 Lx_tot = 1.0; Ly_tot = 1.0;
 
 % ---- RVE sizes to sweep (each produces its own Ensemble_Summary file) ----
-Nlist = [1,2,3];
+Nlist = [1,2,3,4,5,6,7,8];
 
 % ---- geometry / mesh fractions (same names as Main2D_LE.py) ----
 Rfrac    = 6/19;   % inclusion radius / unit-cell size
