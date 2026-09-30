@@ -1,0 +1,1129 @@
+\documentclass[11pt,a4paper]{article}
+
+% ------------------------------------------------------------------
+% Packages (all available on Overleaf / ShareLaTeX)
+% ------------------------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage{booktabs,array,longtable}
+\usepackage{enumitem}
+\usepackage[most]{tcolorbox}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
+
+% ------------------------------------------------------------------
+% Notation
+% ------------------------------------------------------------------
+\newcommand{\C}{\mathbb{C}}                     % homogenized stiffness (known)
+\newcommand{\Cb}{\bar{\mathbb{C}}}              % relative-strain stiffness
+\newcommand{\Ch}{\hat{\mathbb{C}}}              % coupling stiffness
+\newcommand{\GG}{\mathbb{G}}                    % curvature matrix
+\newcommand{\Dm}{\mathbf{D}}                    % phase stiffness
+\newcommand{\B}{\mathbb{B}}                     % local energy block
+\newcommand{\eps}{\bm{\varepsilon}}
+\newcommand{\epsM}{\bm{\varepsilon}_{M}}
+\newcommand{\bpsi}{\bm{\psi}}
+\newcommand{\bgam}{\bm{\gamma}}
+\newcommand{\bkap}{\bm{\kappa}}
+\newcommand{\bsig}{\bm{\sigma}}
+\newcommand{\bmu}{\bm{\mu}}
+\newcommand{\bx}{\bm{x}}
+\newcommand{\bX}{\bm{X}}
+\newcommand{\bu}{\bm{u}}
+\newcommand{\bH}{\bm{H}}
+\newcommand{\bG}{\bm{G}}
+\newcommand{\bK}{\bm{K}}
+\newcommand{\bP}{\bm{P}}
+\newcommand{\bb}{\bm{b}}
+\newcommand{\bth}{\bm{\theta}}
+\newcommand{\sym}{\operatorname{sym}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\ve}[1]{\{#1\}_{\varepsilon}}      % strain-like Voigt vector
+\newcommand{\vs}[1]{\{#1\}_{\sigma}}           % stress-like Voigt vector
+\newcommand{\Zset}{\mathcal{Z}}
+\newcommand{\Nset}{\mathcal{N}}
+\newcommand{\Kset}{\mathcal{K}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}{Lemma}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+% ------------------------------------------------------------------
+% "Delivers" box for every step
+% ------------------------------------------------------------------
+\newtcolorbox{delivers}{colback=green!4!white, colframe=green!40!black,
+  boxrule=0.6pt, arc=2pt, left=4pt, right=4pt, top=2pt, bottom=2pt,
+  fonttitle=\bfseries\small, title=Delivers, fontupper=\small}
+\newtcolorbox{codebox}{colback=blue!3!white, colframe=blue!40!black,
+  boxrule=0.4pt, arc=2pt, left=4pt, right=4pt, top=1pt, bottom=1pt,
+  fontupper=\small}
+\newcommand{\implementedin}[1]{\begin{codebox}\textbf{Implemented in:} #1\end{codebox}}
+
+\title{Identification of the Micromorphic Stiffness Matrices\\
+$\Cb$, $\Ch$ and the Curvature Modulus $G$ from Classical FE Data\\[4pt]
+\large Mathematical basis of \code{main\_identify\_CbarChatG.m}, \code{dataGeneration.m},\\
+\code{homogenize2D\_PBC.m}, \code{smoothData.m}, \code{identifyCbarChatG.m}, \code{plotAterms.m}}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The document states, stage by stage and step by step, every mathematical operation performed by
+the identification code. Classical plane-strain finite-element (FE) solutions of an $N\times N$
+matrix--inclusion arrangement are computed under kinematic uniform boundary conditions with
+prescribed first and second displacement gradients, averaged over a full period of inclusion
+translations, and reduced to domain integrals of the micro-deformation $\bpsi$, the relative strain
+$\bgam$ and the micro-curvature $\bkap$, together with the heterogeneous strain energy, the
+integrated stress and the integrated first stress moment. After shape-constrained smoothing over
+$N$, the matrices $\Cb$, $\Ch$ and the curvature modulus $G$ of a micromorphic strain energy are
+identified by a convex, positive-definiteness-constrained least-squares problem in which every
+parameter is a positive, non-increasing function of $N$.
+\end{abstract}
+
+\tableofcontents
+\bigskip
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Stage & Content & Code\\
+\midrule
+0 & Setting, conventions, micromorphic model & --\\
+1 & Load cases and kinematic boundary conditions & \code{dataGeneration}\\
+2 & Homogenized stiffness $\C$ (periodic unit cell) & \code{homogenize2D\_PBC}\\
+3 & Finite-element discretization & \code{dataGeneration}\\
+4 & Evaluation grid, quadrature, regions & \code{dataGeneration}\\
+5 & Macroscopic reference field $\epsM$ & \code{dataGeneration}\\
+6 & Translation averaging and FE stress integrals & \code{dataGeneration}\\
+7 & Relative strain and micro-curvature & \code{dataGeneration}\\
+8 & Integral data $A_1\dots A_{19}$, $I_1\dots I_{24}$ & \code{dataGeneration}\\
+9 & Smoothing over $N$ & \code{smoothData}\\
+10 & Identification equations & \code{identifyCbarChatG}\\
+11 & Solution: monotone, energy-positive-definite (default) & \code{identifyCbarChatG}\\
+12 & Solution: free per $N$ / global (comparison) & \code{identifyCbarChatG}\\
+13 & Outputs and diagnostic plots & \code{identifyCbarChatG}, \code{plotAterms}\\
+14 & Consistency properties and checks & all\\
+\bottomrule
+\end{tabular}
+\caption{Stages of the pipeline, in the order in which \code{main\_identify\_CbarChatG.m} executes them.}
+\end{table}
+
+% ==================================================================
+\section{Stage 0 -- Setting, conventions and the micromorphic model}
+\label{sec:stage0}
+% ==================================================================
+
+\subsection*{Step 0.1 -- Specimen, unit cells and phases}
+The specimen is $\Omega=[0,L_x]\times[0,L_y]$ ($L_x=L_y=L=1$ by default) of thickness $t$ and
+volume $V=L_xL_yt$, divided into $N\times N$ square unit cells of size
+\begin{equation}
+  \ell=\frac{L}{N},\qquad \ell^2(N)=\Big(\frac{L_x}{N}\Big)^2 ,
+  \label{eq:ell}
+\end{equation}
+each containing one circular inclusion of radius $R=r\,\ell$ ($r=6/19$). Coordinates relative to
+the centre $\bX_c=(L_x/2,L_y/2)$ are $\bx=\bX-\bX_c$. Both phases are isotropic, linear elastic,
+in plane strain:
+\begin{equation}
+  \Dm(E,\nu)=\frac{E}{(1+\nu)(1-2\nu)}
+  \begin{bmatrix}1-\nu&\nu&0\\ \nu&1-\nu&0\\ 0&0&\tfrac{1-2\nu}{2}\end{bmatrix},
+  \qquad
+  \Dm(\bX)=\begin{cases}\Dm_m=\Dm(E_m,\nu_m),&\bX\in\Omega_m,\\ \Dm_i=\Dm(E_i,\nu_i),&\bX\in\Omega_i.\end{cases}
+  \label{eq:Dphase}
+\end{equation}
+\begin{delivers}
+Geometry $(L_x,L_y,t,V,N,\ell,R)$ and phase stiffnesses $\Dm_m,\Dm_i$.
+\end{delivers}
+
+\subsection*{Step 0.2 -- Tensor and Voigt conventions}
+Strain-type fields $\eps,\epsM,\bpsi,\bgam$ are stored as tensor components
+$(a_{11},a_{22},a_{12})$ ($a_{12}$ tensorial). Their strain-like and stress-like Voigt vectors are
+\begin{equation}
+  \ve{\bm a}=\begin{bmatrix}a_{11}\\a_{22}\\2a_{12}\end{bmatrix},\qquad
+  \vs{\bm a}=\begin{bmatrix}a_{11}\\a_{22}\\a_{12}\end{bmatrix},\qquad
+  \bm a:\bm b=\vs{\bm a}^T\ve{\bm b},
+  \label{eq:voigt}
+\end{equation}
+and stresses are $\vs{\bsig}=\Dm\ve{\eps}$. Throughout, $\bpsi$ denotes the symmetric
+micro-deformation $\sym(\bpsi)$, and $\bm a^T\mathbb{X}\bm b:=\ve{\bm a}^T\mathbb{X}\ve{\bm b}$ for
+any $3\times3$ stiffness $\mathbb{X}$. The micro-curvature is stored as the six-vector
+\begin{equation}
+  \bkap=[\kappa_{111},\kappa_{112},\kappa_{221},\kappa_{222},\kappa_{121},\kappa_{122}]^T,
+  \qquad \kappa_{ijk}=\partial_k\psi_{ij}.
+  \label{eq:kappa}
+\end{equation}
+\begin{delivers}
+The conventions \eqref{eq:voigt}--\eqref{eq:kappa} used by every later step.
+\end{delivers}
+
+\subsection*{Step 0.3 -- Micromorphic strain energy}
+With the macroscopic strain $\epsM=\sym(\nabla\bu)$, the relative strain
+\begin{equation}
+  \bgam=\epsM-\bpsi
+  \label{eq:gammadef}
+\end{equation}
+and $\bkap=\nabla\bpsi$, the strain energy density is
+\begin{equation}
+  \boxed{\;W=\tfrac12\,\bpsi^T\C\,\bpsi+\tfrac12\,\bgam^T\Cb\,\bgam+\bpsi^T\Ch\,\bgam
+  +\tfrac12\,\ell^2\,\bkap^T\GG\,\bkap\;}
+  \label{eq:W}
+\end{equation}
+with the known homogenized stiffness $\C$ (Stage 2), and the unknown matrices of cubic symmetry
+\begin{equation}
+  \C=\begin{bmatrix}C_{11}&C_{12}&0\\C_{12}&C_{22}&0\\0&0&C_{33}\end{bmatrix},\quad
+  \Cb=\begin{bmatrix}\bar C_{11}&\bar C_{12}&0\\\bar C_{12}&\bar C_{11}&0\\0&0&\bar C_{33}\end{bmatrix},\quad
+  \Ch=\begin{bmatrix}\hat C_{11}&\hat C_{12}&0\\\hat C_{12}&\hat C_{11}&0\\0&0&\hat C_{33}\end{bmatrix},
+  \label{eq:matrices}
+\end{equation}
+\begin{equation}
+  \GG=\operatorname{diag}(G_{11},G_{22},G_{22},G_{11},G_{33},G_{33}),\qquad
+  G_{11}=G_{22}=G_{33}=G\ \ (\code{Gmode='single'}).
+  \label{eq:Gmat}
+\end{equation}
+The terms $C_{13},C_{23}$ of the computed $\C$ (zero by symmetry up to round-off) are discarded.
+In components, using \eqref{eq:voigt},
+\begin{align}
+  2W={}&C_{11}\psi_{11}^2+2C_{12}\psi_{11}\psi_{22}+C_{22}\psi_{22}^2+4C_{33}\psi_{12}^2
+  +\bar C_{11}(\gamma_{11}^2+\gamma_{22}^2)+2\bar C_{12}\gamma_{11}\gamma_{22}+4\bar C_{33}\gamma_{12}^2
+  \nonumber\\
+  &+2\hat C_{11}(\psi_{11}\gamma_{11}+\psi_{22}\gamma_{22})
+  +2\hat C_{12}(\psi_{11}\gamma_{22}+\psi_{22}\gamma_{11})+8\hat C_{33}\psi_{12}\gamma_{12}
+  +\ell^2G\,|\bkap|^2 .
+  \label{eq:Wcomp}
+\end{align}
+
+\paragraph{Conjugate stresses.} Differentiating \eqref{eq:W} with $\bpsi$ and $\bgam$ treated as
+independent (Voigt stress-like vectors):
+\begin{equation}
+  \bm s_{(\mathrm{sym})}=\frac{\partial W}{\partial\ve{\bpsi}}=\C\ve{\bpsi}+\Ch\ve{\bgam},\qquad
+  \bsig_{(\gamma)}=\frac{\partial W}{\partial\ve{\bgam}}=\Cb\ve{\bgam}+\Ch\ve{\bpsi},\qquad
+  \bmu=\frac{\partial W}{\partial\bkap}=\ell^2\GG\bkap .
+  \label{eq:stresses}
+\end{equation}
+Since $\bgam=\epsM-\bpsi$, $\bsig_{(\gamma)}=\partial W/\partial\ve{\epsM}|_{\bpsi}$ is the stress
+conjugate to the macroscopic strain.
+
+\paragraph{Common eigenvectors.} Every symmetric matrix $\mathbb X$ with the structure
+\eqref{eq:matrices} ($X_{11}=X_{22}$, $X_{13}=X_{23}=0$) is diagonalized by
+\begin{equation}
+\begin{gathered}
+  \bm Q=[\bm v_1\ \bm v_2\ \bm v_3],\qquad
+  \bm v_1=\tfrac{1}{\sqrt2}(1,1,0)^T,\quad \bm v_2=\tfrac{1}{\sqrt2}(1,-1,0)^T,\quad \bm v_3=(0,0,1)^T,\\
+  \bm Q^T\mathbb X\bm Q=\operatorname{diag}(x_1,x_2,x_3),
+\end{gathered}
+  \label{eq:modes}
+\end{equation}
+with mode values $x_1=X_{11}+X_{12}$, $x_2=X_{11}-X_{12}$, $x_3=X_{33}$. For $\C$ we use
+$a_C=\tfrac12(C_{11}+C_{22})$: $c_1=a_C+C_{12}$, $c_2=a_C-C_{12}$, $c_3=C_{33}$; likewise
+$\bar c_i$ for $\Cb$ and $\hat c_i$ for $\Ch$.
+
+\begin{proposition}[Positive definiteness of the local energy]
+\label{prop:pd}
+Let $\C\succ0$. The local part of \eqref{eq:W},
+$\tfrac12[\ve{\bpsi};\ve{\bgam}]^T\B[\ve{\bpsi};\ve{\bgam}]$ with
+\begin{equation}
+  \B=\begin{bmatrix}\C&\Ch\\\Ch&\Cb\end{bmatrix},
+  \label{eq:block}
+\end{equation}
+is positive definite if and only if, for every mode $i=1,2,3$,
+\begin{equation}
+  c_i\,\bar c_i-\hat c_i^{\,2}>0 .
+  \label{eq:pdmode}
+\end{equation}
+\end{proposition}
+\begin{proof}
+With $\bm Q$ of \eqref{eq:modes}, $\operatorname{diag}(\bm Q,\bm Q)^T\B\operatorname{diag}(\bm Q,\bm Q)$
+decouples into the three $2\times2$ blocks
+$\big[\begin{smallmatrix}c_i&\hat c_i\\\hat c_i&\bar c_i\end{smallmatrix}\big]$, each positive
+definite iff $c_i>0$ and $c_i\bar c_i-\hat c_i^2>0$ (Sylvester).
+\end{proof}
+\noindent In particular \eqref{eq:pdmode} implies $\bar c_i>0$, i.e.\ $\Cb\succ0$.
+\begin{delivers}
+Energy \eqref{eq:W}, conjugate stresses \eqref{eq:stresses}, unknowns
+$\bth=[\bar C_{11},\bar C_{12},\bar C_{33},\hat C_{11},\hat C_{12},\hat C_{33},G]$ (7; 9 with
+\code{Gmode='three'}), and the mode form \eqref{eq:pdmode} of positive definiteness.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 1 -- Load cases and kinematic boundary conditions}
+\label{sec:stage1}
+% ==================================================================
+
+\subsection*{Step 1.1 -- From the raw load vector to $\bH$ and $\bG$}
+\implementedin{\code{assembleHG}}
+A load case is a raw vector $\hat{\bm h}=[\hat h_1,\dots,\hat h_9]$ ordered as
+\[
+  [H_{11},H_{22},H_{12},G_{1,11},G_{1,22},G_{1,12},G_{2,11},G_{2,22},G_{2,12}] .
+\]
+With amplitude $\varepsilon_0$ and gradient scale $g$ ($\varepsilon_0=0.01$, $g=2$):
+\begin{equation}
+\begin{aligned}
+  &H_{11}=\varepsilon_0\hat h_1,\quad H_{22}=\varepsilon_0\hat h_2,\quad H_{12}=H_{21}=\varepsilon_0\hat h_3,\\
+  &G_{111}=g\varepsilon_0\hat h_4,\ G_{122}=g\varepsilon_0\hat h_5,\ G_{112}=G_{121}=g\varepsilon_0\hat h_6,\\
+  &G_{211}=g\varepsilon_0\hat h_7,\ G_{222}=g\varepsilon_0\hat h_8,\ G_{212}=G_{221}=g\varepsilon_0\hat h_9 .
+\end{aligned}
+\label{eq:HG}
+\end{equation}
+
+\subsection*{Step 1.2 -- Kinematic uniform boundary conditions (KUBC)}
+All boundary nodes of every mesh receive
+\begin{equation}
+  u_i(\bX)=H_{ij}x_j+\tfrac12 G_{ijk}x_jx_k,\qquad \bX\in\partial\Omega,\quad \bx=\bX-\bX_c,
+  \label{eq:kubc}
+\end{equation}
+whose strain is $\sym(\nabla\bu)_{ij}=\sym(\bH)_{ij}+\tfrac12(G_{ijk}+G_{jik})x_k$.
+
+\subsection*{Step 1.3 -- Load-case library}
+\implementedin{\code{buildCaseLibrary} (\code{cfg.cases.library})}
+All library vectors have unit norm. \code{H3G16} contains 19 cases:
+
+\begin{center}\small
+\begin{tabular}{@{}cll@{}}
+\toprule
+\# & case & non-zero raw components\\
+\midrule
+1--3 & $H_{11}$, $H_{22}$, $H_{12}$ & $\hat h_1=1$; $\hat h_2=1$; $\hat h_3=1$\\
+4--9 & single $G$ components & $\hat h_a=1$, $a=4,\dots,9$\\
+10, 11 & bending / shear gradient in $X$ & $(\hat h_6,\hat h_7)=(1,\mp1)/\sqrt2$\\
+12, 13 & bending / shear gradient in $Y$ & $(\hat h_9,\hat h_5)=(1,\mp1)/\sqrt2$\\
+14, 15 & $G_{1,11}\pm G_{2,12}$ & $(\hat h_4,\hat h_9)=(1,\pm1)/\sqrt2$\\
+16, 17 & $G_{1,12}\pm G_{2,22}$ & $(\hat h_6,\hat h_8)=(1,\pm1)/\sqrt2$\\
+18 & $G_{1,11}+G_{2,22}$ & $(\hat h_4,\hat h_8)=(1,1)/\sqrt2$\\
+19 & all six $G$ equal & $\hat h_4=\dots=\hat h_9=1/\sqrt6$\\
+\bottomrule
+\end{tabular}
+\end{center}
+\code{G16} omits cases 1--3, \code{G6} keeps the single $G$ components, \code{G21} contains the six
+singles and all 15 pairs $(\hat{\bm e}_a+\hat{\bm e}_b)/\sqrt2$.
+\begin{delivers}
+For every load case $k\in\Kset$: $\bH^{(k)}$, $\bG^{(k)}$ and the boundary data \eqref{eq:kubc}.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 2 -- Homogenized stiffness $\C$ by periodic homogenization}
+\label{sec:stage2}
+% ==================================================================
+\implementedin{\code{homogenize2D\_PBC.m} (called once, independent of $N$)}
+
+\subsection*{Step 2.1 -- Periodic displacement field}
+A single unit cell $Y=[0,L_c]^2$ with one centred inclusion is meshed with the same T6 elements as
+in Stage 3 (periodic node pattern on opposite edges). For a prescribed macroscopic strain
+$\bar\eps$ the displacement is
+\begin{equation}
+\begin{gathered}
+  \bu(\bX)=\bar\eps\,\bX+\tilde\bu(\bX),\qquad \tilde\bu\ \text{periodic}\\
+  \Longleftrightarrow\quad
+  \bu(\bX+\bm L_\alpha)-\bu(\bX)=\bar\eps\,\bm L_\alpha,\qquad \bm L_1=(L_c,0),\ \bm L_2=(0,L_c).
+\end{gathered}
+  \label{eq:pbc}
+\end{equation}
+
+\subsection*{Step 2.2 -- Master/slave reduction}
+Right- and top-edge nodes are slaved to their left/bottom partners, corners $(L_c,0)$, $(0,L_c)$,
+$(L_c,L_c)$ to the origin corner, which is pinned to remove the rigid-body motion:
+\begin{equation}
+  \bu=\bm T\bu_m+\bu_p,\qquad
+  \bu_p\big|_{\text{slave}}=\bar\eps\,\bm L_\alpha\ \text{(offsets)},
+\end{equation}
+where $\bm T$ maps the master degrees of freedom $\bu_m$ (interior, left and bottom edges) to all
+degrees of freedom. The reduced equilibrium equations are
+\begin{equation}
+  \bm T^T\bK\bm T\,\bu_m=-\bm T^T\bK\,\bu_p .
+  \label{eq:pbcsolve}
+\end{equation}
+
+\subsection*{Step 2.3 -- Three unit-strain cases and $\C$}
+For $\ve{\bar\eps}\in\{(1,0,0),(0,1,0),(0,0,1)\}$ the volume averages
+\begin{equation}
+  \langle\vs{\bsig}\rangle=\frac1{V_c}\int_Y\vs{\bsig}\dd V,\qquad
+  \langle\ve{\eps}\rangle=\frac1{V_c}\int_Y\ve{\eps}\dd V
+\end{equation}
+are computed by Gauss quadrature; the $k$-th column of $\C$ is
+$\big(\langle\sigma_{11}\rangle,\langle\sigma_{22}\rangle,\langle\sigma_{12}\rangle\big)^T$, so that
+\begin{equation}
+  \langle\vs{\bsig}\rangle=\C\,\langle\ve{\eps}\rangle .
+\end{equation}
+The recovered strain is checked, $\|\langle\ve{\eps}\rangle-\ve{\bar\eps}\|<10^{-8}$. The
+out-of-plane stress $\sigma_{33}=\nu(\sigma_{11}+\sigma_{22})$ of each phase yields the row
+$\bm C_{s33}$ (not used in the identification).
+\begin{delivers}
+$\C=\C_{\mathrm{hom}}\in\mathbb R^{3\times3}$, with $\lambda_{\max}(\C)$ used later for scaling and
+margins.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 3 -- Finite-element discretization}
+\label{sec:stage3}
+% ==================================================================
+
+\subsection*{Step 3.1 -- Geometry and meshing}
+\implementedin{\code{buildInclusionCenters}, \code{buildRUCMesh}, \code{buildPlainMesh}}
+For a shift $\bm\zeta=(\zeta_1,\zeta_2)$ the inclusion centres are
+\begin{equation}
+  \bX^{(ij)}=\big((i+\tfrac12)\ell+\zeta_1,\ (j+\tfrac12)\ell+\zeta_2\big),\qquad i,j=-1,\dots,N,
+  \label{eq:centres}
+\end{equation}
+kept if their bounding box intersects $\Omega$. The geometry is
+$\Omega\cap\big(\Omega\cup\bigcup_{ij}B_R(\bX^{(ij)})\big)$ (set formula \code{(R1+C1+...)*R1}),
+so inclusions crossing $\partial\Omega$ are clipped. The mesh has element size $h=0.05\,\ell$
+(heterogeneous) or $h=0.02\,L$ (plain domain of Stage 5). An element belongs to the inclusion
+phase iff its corner-node centroid lies inside one of the circles.
+
+\subsection*{Step 3.2 -- Six-node triangle}
+\implementedin{\code{t6ShapeDeriv}, \code{gauss3}, \code{buildElemData}}
+With area coordinates $(L_1,L_2,L_3=1-L_1-L_2)$,
+\begin{equation}
+  \bm N=\big[L_1(2L_1-1),\ L_2(2L_2-1),\ L_3(2L_3-1),\ 4L_1L_2,\ 4L_2L_3,\ 4L_3L_1\big]^T,
+  \label{eq:shape}
+\end{equation}
+Jacobian $\bm J=\begin{bmatrix}\partial_{L_1}\bm N^T\bm x_e&\partial_{L_2}\bm N^T\bm x_e\\
+\partial_{L_1}\bm N^T\bm y_e&\partial_{L_2}\bm N^T\bm y_e\end{bmatrix}$ and
+$[\partial_X\bm N,\ \partial_Y\bm N]=[\partial_{L_1}\bm N,\ \partial_{L_2}\bm N]\,\bm J^{-1}$.
+The three-point rule uses $(L_1,L_2)_g\in\{(\tfrac23,\tfrac16),(\tfrac16,\tfrac23),(\tfrac16,\tfrac16)\}$,
+$w_g=\tfrac16$. The strain matrix is
+\begin{equation}
+  \bm B=\begin{bmatrix}
+  \partial_XN_1&0&\cdots&\partial_XN_6&0\\
+  0&\partial_YN_1&\cdots&0&\partial_YN_6\\
+  \partial_YN_1&\partial_XN_1&\cdots&\partial_YN_6&\partial_XN_6\end{bmatrix},\qquad
+  \ve{\eps}=\bm B\bu_e .
+  \label{eq:B}
+\end{equation}
+
+\subsection*{Step 3.3 -- Stiffness, KUBC solve and energy}
+\implementedin{\code{elementStiffnessLE}, \code{assembleGlobalK\_LE}, \code{solveKUBC}}
+\begin{equation}
+  \bK_e=\sum_{g=1}^3w_g\det\bm J_g\,t\,\bm B_g^T\Dm_e\bm B_g,\qquad
+  \bK=\operatorname*{\mathsf{A}}_e\bK_e .
+  \label{eq:K}
+\end{equation}
+With the boundary degrees of freedom $d$ prescribed by \eqref{eq:kubc} and the free ones $f$,
+\begin{equation}
+  \bK_{ff}\,\bu_f=-\bK_{fd}\,\bu_d ,
+  \label{eq:solve}
+\end{equation}
+solved for all load cases at once (one right-hand side per case). The strain energy is
+\begin{equation}
+  2U=\bu^T\bK\bu .
+  \label{eq:energy}
+\end{equation}
+\begin{delivers}
+For each mesh and load case: nodal displacements $\bu^{(k)}$ and energy $2U^{(k)}$.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 4 -- Evaluation grid, quadrature and regions}
+\label{sec:stage4}
+% ==================================================================
+
+\subsection*{Step 4.1 -- Grid and point location}
+\implementedin{\code{locateGridPoints}, \code{gridStrainOperator}}
+All fields are evaluated on the regular grid $\bX_p=(x_a,y_b)$, $x_a=\tfrac{a-1}{n_g-1}L_x$,
+$y_b=\tfrac{b-1}{n_g-1}L_y$, spacing $h_g$, with
+\begin{equation}
+  n_g(N)=\max\big(n_{g,\min},\ n_{\mathrm{cell}}N+1\big),\qquad n_{g,\min}=121,\ n_{\mathrm{cell}}=40,
+\end{equation}
+so that every unit cell is resolved by at least $n_{\mathrm{cell}}$ grid intervals for every $N$
+(a fixed grid would make the quadrature error of the interface jumps grow with $N$). Each point is located in the straight-sided
+(corner-node) triangle of an element through its barycentric coordinates
+\begin{equation}
+  \begin{bmatrix}L_1\\L_2\end{bmatrix}=
+  \begin{bmatrix}x_1-x_3&x_2-x_3\\y_1-y_3&y_2-y_3\end{bmatrix}^{-1}
+  \begin{bmatrix}X-x_3\\Y-y_3\end{bmatrix},\qquad L_3=1-L_1-L_2,
+\end{equation}
+the element with the largest $\min(L_1,L_2,L_3)$ being chosen (points on shared edges, interfaces).
+The strain at $\bX_p$ is the element strain there, in tensor components,
+\begin{equation}
+  \varepsilon_{11}=\textstyle\sum_a\partial_XN_a u_{1a},\quad
+  \varepsilon_{22}=\sum_a\partial_YN_a u_{2a},\quad
+  \varepsilon_{12}=\tfrac12\sum_a(\partial_YN_a u_{1a}+\partial_XN_a u_{2a}),
+\end{equation}
+assembled into a sparse operator $\bm B_{\mathrm{grid}}$ with $\eps(\bX_p)=\bm B_{\mathrm{grid}}\bu$.
+Jumps across material interfaces are retained (no nodal smoothing).
+
+\subsection*{Step 4.2 -- Region weights}
+\implementedin{\code{regionWeights}, \code{cellW}}
+For a box $\mathcal R=[a_x,b_x]\times[a_y,b_y]$, each grid point receives the length of its grid
+cell inside the box,
+\begin{equation}
+  w_a^{(x)}=\big|\,[x_a^-,x_a^+]\cap[a_x,b_x]\,\big|,\qquad
+  x_a^\pm=\tfrac12(x_a+x_{a\pm1}),\ x_1^-=x_1,\ x_{n_g}^+=x_{n_g},
+\end{equation}
+likewise $w_b^{(y)}$, and
+\begin{equation}
+  \int_{\mathcal R}f\dd V\;\approx\;t\sum_p W_p f(\bX_p),\qquad W_p=w_a^{(x)}w_b^{(y)} .
+  \label{eq:quad}
+\end{equation}
+For $\mathcal R=\Omega$ this is the trapezoidal rule; for fractional box edges the box area is
+reproduced exactly.
+
+\subsection*{Step 4.3 -- Full domain and interior region}
+Every integral is evaluated over two regions:
+\begin{equation}
+  \mathcal R_{\mathrm{full}}=\Omega,\qquad
+  \mathcal R_{\mathrm{int}}(N)=[a,L_x-a]\times[a,L_y-a],\quad a=\beta\,\ell ,
+  \label{eq:regions}
+\end{equation}
+with band width $\beta$ (\code{cfg.interiorBand}, default $0.5$ cell). The interior excludes the
+KUBC boundary layer; it is non-empty iff $2a<\min(L_x,L_y)$ (for $\beta=0.5$: $N\ge2$). Region
+volume and root-mean-square moment arm:
+\begin{equation}
+  V_{\mathcal R}=(L_x-2a)(L_y-2a)\,t,\qquad
+  L_{r,\mathcal R}=\frac{\max(L_x-2a,\ L_y-2a)}{\sqrt{12}}
+  \label{eq:VL}
+\end{equation}
+($a=0$ for the full domain; $L/\sqrt{12}$ is the rms of $x$ over $[-L/2,L/2]$).
+\begin{delivers}
+Operator $\bm B_{\mathrm{grid}}$, weights $W_p$ of both regions, $V_{\mathcal R}(N)$,
+$L_{r,\mathcal R}(N)$ and the validity flag of the interior region.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 5 -- Macroscopic reference field}
+\label{sec:stage5}
+% ==================================================================
+\subsection*{Step 5.1 -- Homogeneous KUBC solve}
+The plain domain with $\Dm\equiv\C$ is solved with \eqref{eq:kubc} for all load cases:
+\begin{equation}
+  \epsM^{(k)}(\bX_p)=\bm B_{\mathrm{grid}}\bu_{\mathrm{hom}}^{(k)},\qquad
+  2U^{(k)}_{\mathrm{hom}}=\bu_{\mathrm{hom}}^{(k)T}\bK_{\C}\bu_{\mathrm{hom}}^{(k)} .
+  \label{eq:stage1}
+\end{equation}
+Neither depends on $N$. For the interior region, $2U^{(k)}_{\mathrm{hom},\mathrm{int}}
+=\bu_{\mathrm{hom}}^{(k)T}\bK_{r}\bu_{\mathrm{hom}}^{(k)}$ with the region stiffness $\bK_r$ of
+Step 6.3 (depends on $N$ through $a$).
+\begin{delivers}
+$\epsM^{(k)}$ on the grid, $2U^{(k)}_{\mathrm{hom}}$ for both regions.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 6 -- Translation averaging and FE stress integrals}
+\label{sec:stage6}
+% ==================================================================
+
+\subsection*{Step 6.1 -- Shift set over one full period}
+\implementedin{\code{buildTranslationList} (mode 5)}
+\begin{equation}
+  \Zset=\big\{(s_a\ell,\ s_b\ell)\ :\ s_a=\tfrac{a+1/2}{n}-\tfrac12,\ a,b=0,\dots,n-1\big\},
+  \qquad|\Zset|=n^2,
+  \label{eq:shifts}
+\end{equation}
+($n=8$ by default). $\Zset$ is uniform over one cell and symmetric, $\bm\zeta\in\Zset\Rightarrow
+-\bm\zeta\in\Zset$.
+
+\subsection*{Step 6.2 -- One heterogeneous solve per shift}
+For every $\bm\zeta\in\Zset$: mesh (Step 3.1), assemble $\bK^{(\bm\zeta)}$, solve \eqref{eq:solve}
+for all load cases, and accumulate
+\begin{equation}
+  \eps^{(k,\bm\zeta)}(\bX_p)=\bm B^{(\bm\zeta)}_{\mathrm{grid}}\bu^{(k,\bm\zeta)},\qquad
+  2U^{(k,\bm\zeta)}=\bu^{(k,\bm\zeta)T}\bK^{(\bm\zeta)}\bu^{(k,\bm\zeta)},
+\end{equation}
+and the region integrals of Step 6.3.
+
+\subsection*{Step 6.3 -- Exact region integrals of the FE stress}
+\implementedin{\code{regionOps}}
+For a box $\mathcal R$, only Gauss points $\bX_g\in\mathcal R$ contribute. With
+$\omega_g=w_g\det\bm J_g\,t$ and $\bx_g=\bX_g-\bX_c$,
+\begin{align}
+  \int_{\mathcal R}\vs{\bsig}\dd V&=\bm Q_s\bu, &
+  \bm Q_s&=\operatorname*{\mathsf{A}}_e\sum_{g:\,\bX_g\in\mathcal R}\omega_g\,\Dm_e\bm B_g,
+  \label{eq:Qs}\\
+  \int_{\mathcal R}\sigma_{ij}x_k\dd V&=\bm Q_m\bu, &
+  \bm Q_m&=\operatorname*{\mathsf{A}}_e\sum_{g:\,\bX_g\in\mathcal R}\omega_g
+  \begin{bmatrix}(\Dm_e\bm B_g)_{1\cdot}\,x_{1g}\\(\Dm_e\bm B_g)_{1\cdot}\,x_{2g}\\
+  (\Dm_e\bm B_g)_{2\cdot}\,x_{1g}\\(\Dm_e\bm B_g)_{2\cdot}\,x_{2g}\\
+  (\Dm_e\bm B_g)_{3\cdot}\,x_{1g}\\(\Dm_e\bm B_g)_{3\cdot}\,x_{2g}\end{bmatrix},
+  \label{eq:Qm}\\
+  \int_{\mathcal R}\bsig:\eps\dd V&=\bu^T\bK_r\bu, &
+  \bK_r&=\operatorname*{\mathsf{A}}_e\sum_{g:\,\bX_g\in\mathcal R}\omega_g\,\bm B_g^T\Dm_e\bm B_g ,
+  \label{eq:Kr}
+\end{align}
+the moment vector being ordered
+$[\sigma_{11}x_1,\sigma_{11}x_2,\sigma_{22}x_1,\sigma_{22}x_2,\sigma_{12}x_1,\sigma_{12}x_2]$ and
+$x_{kg}=\bm N_g^T\bm X_{k,e}-X_{c,k}$. For $\mathcal R=\Omega$, $\bK_r=\bK$.
+
+\subsection*{Step 6.4 -- Averages over the shifts}
+For every load case and region,
+\begin{align}
+  \bpsi^{(k)}(\bX_p)&=\frac1{|\Zset|}\sum_{\bm\zeta}\eps^{(k,\bm\zeta)}(\bX_p),
+  \label{eq:psi}\\
+  2U^{(k)}_{\mathrm{het},\mathcal R}&=\frac1{|\Zset|}\sum_{\bm\zeta}\bu^{(k,\bm\zeta)T}\bK_r^{(\bm\zeta)}\bu^{(k,\bm\zeta)}
+  \quad(\text{and its standard deviation}),\\
+  \bm S^{(k)}_{\mathrm{FE},\mathcal R}&=\frac1{|\Zset|}\sum_{\bm\zeta}\bm Q_s^{(\bm\zeta)}\bu^{(k,\bm\zeta)}\in\mathbb R^3,\qquad
+  \bm M^{(k)}_{\mathrm{FE},\mathcal R}=\frac1{|\Zset|}\sum_{\bm\zeta}\bm Q_m^{(\bm\zeta)}\bu^{(k,\bm\zeta)}\in\mathbb R^6 .
+  \label{eq:SMfe}
+\end{align}
+Load cases are never averaged together.
+\begin{delivers}
+$\bpsi^{(k)}$ on the grid; $2U^{(k)}_{\mathrm{het}}$, $\bm S^{(k)}_{\mathrm{FE}}=\int\sigma_{ij}$ and
+$\bm M^{(k)}_{\mathrm{FE}}=\int\sigma_{ij}x_k$ for both regions.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 7 -- Relative strain and micro-curvature}
+\label{sec:stage7}
+% ==================================================================
+
+\subsection*{Step 7.1 -- Relative strain}
+\begin{equation}
+  \bgam^{(k)}(\bX_p)=\epsM^{(k)}(\bX_p)-\bpsi^{(k)}(\bX_p) .
+\end{equation}
+
+\subsection*{Step 7.2 -- Micro-curvature: exact macroscopic part plus smoothed deviation (default)}
+\implementedin{\code{gridStrainOperator} (Stage-1 gradients), \code{localGradient}, \code{kernelMats} (\code{cfg.kappaMethod='local'})}
+Since $\bpsi=\epsM-\bgam$,
+\begin{equation}
+  \boxed{\;\bkap=\nabla\bpsi=\nabla\epsM-\nabla\bgam\;}
+  \label{eq:kapsplit}
+\end{equation}
+The macroscopic part $\nabla\epsM$ is taken exactly from the Stage-1 FE solution (element-wise
+strain gradients of the homogeneous, finely meshed field: for straight T6 elements
+$\partial\eps/\partial\bX=[\eps_1-\eps_3,\ \eps_2-\eps_3]\,\bm A^{-1}$ with corner strains $\eps_m$
+and chord Jacobian $\bm A$); it contains no ripple and no interfaces and is independent of $N$.
+Only the small deviation $\bgam$ is differentiated with the moving least-squares operator below.
+At every grid point $\bX_0$, each component $f$ of $\bgam$ is fitted locally by an affine function,
+\begin{equation}
+  \min_{a,\bm b}\ \sum_p w_p(\bX_0)\,\big(f_p-a-\bm b\cdot(\bX_p-\bX_0)\big)^2,\qquad
+  w_p=g(X_p-X_0)\,g(Y_p-Y_0),\quad
+  g(d)=e^{-d^2/(2\sigma^2)}\,\mathbf 1_{|d|\le3\sigma},
+  \label{eq:mls}
+\end{equation}
+with $\sigma=w_\sigma\ell$ ($w_\sigma=$\code{kappaLocalWidth}$=0.1$), raised to $1.5h_g$ if smaller.
+The gradient is $\nabla f(\bX_0)\approx\bm b$. The normal equations are
+\begin{equation}
+  \underbrace{\begin{bmatrix}m_{11}&m_{12}&m_{13}\\m_{12}&m_{22}&m_{23}\\m_{13}&m_{23}&m_{33}\end{bmatrix}}_{\bm M(\bX_0)}
+  \begin{bmatrix}a\\b_1\\b_2\end{bmatrix}=
+  \begin{bmatrix}r_1\\r_2\\r_3\end{bmatrix},\qquad
+  \begin{aligned}
+  &m_{11}=\textstyle\sum w,\ m_{12}=\sum w\,\delta x,\ m_{13}=\sum w\,\delta y,\\
+  &m_{22}=\textstyle\sum w\,\delta x^2,\ m_{23}=\sum w\,\delta x\,\delta y,\ m_{33}=\sum w\,\delta y^2,\\
+  &r_1=\textstyle\sum wf,\ r_2=\sum wf\,\delta x,\ r_3=\sum wf\,\delta y,
+  \end{aligned}
+\end{equation}
+$\delta x=X_p-X_0$, $\delta y=Y_p-Y_0$. Because $w$ is separable, all sums are matrix products with
+the one-dimensional kernel matrices $\bm K^{(q)}_{ij}=g(x_j-x_i)\,(x_j-x_i)^q$, $q=0,1,2$ (on the
+grid array $\bm F$ of $f$):
+\begin{equation}
+  r_1=\bm K_y^{(0)}\bm F\bm K_x^{(0)T},\quad r_2=\bm K_y^{(0)}\bm F\bm K_x^{(1)T},\quad
+  r_3=\bm K_y^{(1)}\bm F\bm K_x^{(0)T},
+\end{equation}
+and the $m_{ij}$ likewise with $\bm F=\bm 1$. With the cofactors
+$c_{11}=m_{22}m_{33}-m_{23}^2$, $c_{12}=-(m_{12}m_{33}-m_{13}m_{23})$, $c_{22}=m_{11}m_{33}-m_{13}^2$,
+$c_{23}=-(m_{11}m_{23}-m_{12}m_{13})$, $c_{13}=m_{12}m_{23}-m_{13}m_{22}$,
+$c_{33}=m_{11}m_{22}-m_{12}^2$ and $\det\bm M=m_{11}c_{11}+m_{12}c_{12}+m_{13}c_{13}$,
+\begin{equation}
+  b_1=\frac{c_{12}r_1+c_{22}r_2+c_{23}r_3}{\det\bm M},\qquad
+  b_2=\frac{c_{13}r_1+c_{23}r_2+c_{33}r_3}{\det\bm M} .
+  \label{eq:mlssol}
+\end{equation}
+Applied to $\gamma_{11},\gamma_{22},\gamma_{12}$ this gives $\nabla\bgam$, and $\bkap$ follows from
+\eqref{eq:kapsplit} in the order \eqref{eq:kappa}.
+
+\begin{lemma}[Properties of the local gradient]
+\label{lem:mls}
+(i) For an affine field $f=\alpha+\bm\beta\cdot\bX$ the estimate is exact, $\bm b=\bm\beta$, at
+every grid point including the boundary, since the fit is unbiased for affine data regardless of
+the (one-sided) weight distribution. (ii) Because $\sigma\propto\ell$, a microstructural boundary
+layer of width proportional to $\ell$ is resolved to the same relative accuracy for every $N$.
+Macroscopic features (width independent of $\ell$) would be resolved differently at every $N$;
+this is why the macroscopic part is excluded from the window in \eqref{eq:kapsplit}.
+(iii) The ripple with period $\ell/n$ left by the finite shift set is damped by
+$\exp(-2\pi^2\sigma^2n^2/\ell^2)$, which requires $w_\sigma\gtrsim0.6/n$
+($e^{-12.6}$ for $n=8$, $w_\sigma=0.1$).
+\end{lemma}
+
+\subsection*{Step 7.3 -- Alternatives}
+\code{'localPlain'}: the window applied to $\bpsi$ itself (resolves the macroscopic boundary
+gradients differently at every $N$). \code{'polyfit'}: weighted least-squares fit of each component with the monomials
+$\phi_{ab}=s^a\tau^b$, $a+b\le p$, $s=(X-X_c)/L_x$, $\tau=(Y-Y_c)/L_y$,
+$\bm c=(\bm\Phi^T\bm W\bm\Phi)^{-1}\bm\Phi^T\bm W\bm f$, differentiated analytically (removes
+boundary layers). \code{'element'}: element-wise strain gradients averaged over the shifts
+(misses the interface jumps). \code{'gridFD'}: central differences (grid dependent).
+
+\subsection*{Step 7.4 -- Curvature of the macroscopic field}
+$\bkap_M=\nabla\epsM$ is the exact Stage-1 gradient of \eqref{eq:kapsplit}, used for the reference
+integrals of Stage 8. As a check of the gradient operator, the code reports the variation of
+$\int|\bkap_M|^2$ over $N$ (full domain), which must vanish up to quadrature
+($\approx1\%$; with the window applied to $\epsM$ it reached $>100\%$).
+\begin{delivers}
+$\bgam^{(k)}$, $\bkap^{(k)}$ and $\bkap_M^{(k)}$ on the grid.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 8 -- Integral data}
+\label{sec:stage8}
+% ==================================================================
+\implementedin{\code{dataGeneration}, Stage 4 of the code}
+With \eqref{eq:quad} over region $\mathcal R$ (all tensor components):
+\begin{align}
+  &A_1=\!\int\!\psi_{11}^2,\ A_2=\!\int\!\psi_{11}\psi_{22},\ A_3=\!\int\!\psi_{22}^2,\ A_4=\!\int\!\psi_{12}^2,
+  \nonumber\\
+  &A_5=\!\int\!\gamma_{11}^2,\ A_6=\!\int\!\gamma_{11}\gamma_{22},\ A_7=\!\int\!\gamma_{22}^2,\ A_8=\!\int\!\gamma_{12}^2,
+  \nonumber\\
+  &A_9=\!\int\!\psi_{11}\gamma_{11},\ A_{10}=\!\int\!\psi_{11}\gamma_{22},\ A_{11}=\!\int\!\psi_{22}\gamma_{11},\
+  A_{12}=\!\int\!\psi_{22}\gamma_{22},\ A_{13}=\!\int\!\psi_{12}\gamma_{12},
+  \nonumber\\
+  &A_{14}=\!\int\!\kappa_{111}^2,\ A_{15}=\!\int\!\kappa_{112}^2,\ A_{16}=\!\int\!\kappa_{122}^2,\
+  A_{17}=\!\int\!\kappa_{222}^2,\ A_{18}=\!\int\!\kappa_{121}^2,\ A_{19}=\!\int\!\kappa_{221}^2,
+  \label{eq:A}
+\end{align}
+\begin{align}
+  &I_{1..3}=\!\int\!(\psi_{11},\psi_{22},\psi_{12}),\quad
+  I_{4..6}=\!\int\!(\gamma_{11},\gamma_{22},\gamma_{12}),\quad
+  I_{7..12}=\!\int\!(\kappa_{111},\kappa_{112},\kappa_{221},\kappa_{222},\kappa_{121},\kappa_{122}),
+  \nonumber\\
+  &I_{13..18}=\!\int\!(\psi_{11}x_1,\psi_{11}x_2,\psi_{22}x_1,\psi_{22}x_2,\psi_{12}x_1,\psi_{12}x_2),
+  \nonumber\\
+  &I_{19..24}=\!\int\!(\gamma_{11}x_1,\gamma_{11}x_2,\gamma_{22}x_1,\gamma_{22}x_2,\gamma_{12}x_1,\gamma_{12}x_2),
+  \label{eq:I}
+\end{align}
+with $x_k$ measured from the centre of $\Omega$ for both regions. The macroscopic references
+$A^M_j$ are the integrals of $A_1$--$A_4$ with $\bpsi\to\epsM$ and of $A_{14}$--$A_{19}$ with
+$\bkap\to\bkap_M$ ($A^M_5\dots A^M_{13}$ are not defined). As a quadrature check,
+$\int_\Omega\epsM^T\C\epsM\dd V$ (grid) is compared with $2U_{\mathrm{hom}}$ (FE).
+\begin{delivers}
+For every region, $N$ and load case: $A_1\dots A_{19}$, $I_1\dots I_{24}$, $A^M_j$,
+$2U_{\mathrm{het}}$, $2U_{\mathrm{hom}}$, $\bm S_{\mathrm{FE}}$, $\bm M_{\mathrm{FE}}$,
+$V_{\mathcal R}$, $L_{r,\mathcal R}$, $\ell^2$ (file \code{DataGeneration.mat}).
+\end{delivers}
+
+% ==================================================================
+\section{Stage 9 -- Smoothing over $N$}
+\label{sec:stage9}
+% ==================================================================
+\implementedin{\code{smoothData}, \code{fitN}, \code{nnlsScaled}}
+
+\subsection*{Step 9.1 -- Region and admissible $N$}
+The chosen region's data are mapped onto the standard names; only
+\[
+  N\in\Nset_s=\{N\ge N_{\min},\ \text{region non-empty}\}
+\]
+are used ($N_{\min}=1$ by default; at least three values are required).
+
+\subsection*{Step 9.2 -- Densities}
+To remove the purely geometric $N$-dependence of the interior region, every quantity is fitted as a
+density and multiplied back afterwards:
+\begin{equation}
+  \tilde A_j=\frac{A_j}{V_{\mathcal R}}\ (j\le13),\quad
+  \tilde A_j=\frac{\ell^2A_j}{V_{\mathcal R}}\ (j\ge14),\quad
+  \tilde I_j=\frac{I_j}{V_{\mathcal R}}\ (j\le12),\quad
+  \tilde I_j=\frac{I_j}{V_{\mathcal R}L_{r,\mathcal R}}\ (j\ge13),
+\end{equation}
+$\tilde{\bm S}=\bm S_{\mathrm{FE}}/V_{\mathcal R}$, $\tilde{\bm M}=\bm M_{\mathrm{FE}}/(V_{\mathcal R}L_{r,\mathcal R})$.
+The curvature terms are fitted as $\ell^2A_j$ because $A_j$ itself may grow with $N$ (a boundary
+layer of width $\sim\ell$ and gradient $\sim\Delta\psi/\ell$ gives $\int\kappa^2\sim N$), while the
+energy contribution $\ell^2A_j$ decreases (bulk $\sim N^{-2}$, boundary layer $\sim N^{-1}$).
+
+\subsection*{Step 9.3 -- Shape-constrained fits}
+Every density $y(N)$ is represented by
+\begin{equation}
+  \hat y(N)=\sum_kc_kN^{-p_k},
+  \label{eq:fit}
+\end{equation}
+fitted by weighted relative least squares,
+\begin{equation}
+  \min_{\bm c}\sum_{N\in\Nset_s}\Big(\frac{\hat y(N)-y(N)}{\max(|y(N)|,\,10^{-3}\max|y|)}\Big)^2,
+  \label{eq:wls}
+\end{equation}
+under the constraints of Table~\ref{tab:smooth}. Non-negativity is solved by \code{lsqnonneg} on
+column- and row-balanced data ($\bm A\to\bm A\,\mathrm{diag}(1/\max_i|A_{ij}|)$,
+$\bm y\to\bm y/\max|y|$); ``one sign'' fits $c\ge0$ to $y$ and to $-y$ and keeps the better. A fit
+never has more terms than $|\Nset_s|-1$; if the exponent set is larger, the best-fitting subset of
+that size is selected.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+quantity (density) & model & property\\
+\midrule
+$A_5,A_7,A_8$ ($\gamma\gamma$) & $c_k\ge0$, $p\in\mathcal P_d$ & decreasing $\to0$\\
+$A_6$, $A_9$--$A_{13}$ & one sign, $p\in\mathcal P_d$ & $|\cdot|$ decreasing $\to0$\\
+$\ell^2A_{14}$--$\ell^2A_{19}$ & $c_k\ge0$, $p\in\mathcal P_d$ & decreasing $\to0$\\
+$I_{19}$--$I_{24}$ ($\int\gamma x_k$) & one sign, $p\in\mathcal P_d$ & $|\cdot|$ decreasing $\to0$\\
+$A_1$--$A_4$, $I_1$--$I_{18}$, $\bm S_{\mathrm{FE}}$, $\bm M_{\mathrm{FE}}$ & free, $p\in\mathcal P_f$ & smooth\\
+$2U_{\mathrm{het}}/V-2U_{\mathrm{hom}}/V$ & one sign, $p\in\mathcal P_d$ & excess $\to0$\\
+\bottomrule
+\end{tabular}
+\caption{Smoothing models, $\mathcal P_d=\{\tfrac12,1,\tfrac32,2\}$, $\mathcal P_f=\{0,1,2\}$.}
+\label{tab:smooth}
+\end{table}
+
+\begin{lemma}[Monotonicity]
+If $p_k>0$, $c_k\ge0$ and $\sum_kc_k>0$, then $\hat y$ of \eqref{eq:fit} is positive, strictly
+decreasing and convex, and $\hat y(N)\to0$ for $N\to\infty$.
+\end{lemma}
+\begin{proof}
+$\hat y'=-\sum_kc_kp_kN^{-p_k-1}<0$, $\hat y''=\sum_kc_kp_k(p_k+1)N^{-p_k-2}>0$.
+\end{proof}
+
+\subsection*{Step 9.4 -- Energy}
+With the exact Stage-1 density $e_{\mathrm{hom}}(N)=2U_{\mathrm{hom},\mathcal R}/V_{\mathcal R}$,
+the excess $2U_{\mathrm{het}}/V_{\mathcal R}-e_{\mathrm{hom}}$ is fitted (one sign) and
+$2\hat U_{\mathrm{het}}=(e_{\mathrm{hom}}+\widehat{\text{excess}})V_{\mathcal R}$.
+\begin{delivers}
+Smoothed $A_j$, $I_j$, $\bm S_{\mathrm{FE}}$, $\bm M_{\mathrm{FE}}$, $2U_{\mathrm{het}}$ on $\Nset_s$
+(file \code{SmoothedData.mat}); relative RMS of every fit.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 10 -- Identification equations}
+\label{sec:stage10}
+% ==================================================================
+\implementedin{\code{caseRows}}
+For every load case $k$ and $N$, three groups of linear equations in
+\[
+  \bth=[\bar C_{11},\bar C_{12},\bar C_{33},\hat C_{11},\hat C_{12},\hat C_{33},G]
+\]
+follow by integrating \eqref{eq:Wcomp} and \eqref{eq:stresses} over the region with the definitions
+\eqref{eq:A}--\eqref{eq:I}.
+
+\subsection*{Step 10.1 -- Energy (1 equation)}
+\begin{equation}
+  \boxed{
+  \begin{aligned}
+  &\bar C_{11}(A_5+A_7)+2\bar C_{12}A_6+4\bar C_{33}A_8
+  +2\hat C_{11}(A_9+A_{12})+2\hat C_{12}(A_{10}+A_{11})+8\hat C_{33}A_{13}\\
+  &\quad+\ell^2G\sum_{j=14}^{19}A_j
+  \;=\;2U_{\mathrm{het}}-\big(C_{11}A_1+2C_{12}A_2+C_{22}A_3+4C_{33}A_4\big).
+  \end{aligned}}
+  \label{eq:eqE}
+\end{equation}
+With \code{Gmode='three'} the last term is
+$\ell^2\big[G_{11}(A_{14}+A_{17})+G_{22}(A_{15}+A_{19})+G_{33}(A_{16}+A_{18})\big]$.
+
+\subsection*{Step 10.2 -- Integrated stress (3 equations)}
+The FE stress integral is matched with the integral of $\bsig_{(\gamma)}$, the stress conjugate to
+$\epsM$:
+\begin{equation}
+  \boxed{
+  \begin{aligned}
+  \bar C_{11}I_4+\bar C_{12}I_5+\hat C_{11}I_1+\hat C_{12}I_2&=S_{\mathrm{FE},1},\\
+  \bar C_{12}I_4+\bar C_{11}I_5+\hat C_{12}I_1+\hat C_{11}I_2&=S_{\mathrm{FE},2},\\
+  2\bar C_{33}I_6+2\hat C_{33}I_3&=S_{\mathrm{FE},3}.
+  \end{aligned}}
+  \label{eq:eqS}
+\end{equation}
+
+\subsection*{Step 10.3 -- Integrated double stress (6 equations)}
+For a quadratic virtual displacement $\delta u_i=\tfrac12\delta G_{ijk}x_jx_k$ the virtual strain is
+$\delta\eps=\delta\bkap\,\bx$ with constant $\delta\kappa_{ijk}=\tfrac12(\delta G_{ijk}+\delta G_{jik})$,
+and
+\begin{equation}
+  \int\bsig:\delta\eps\dd V=\sum_k\int\big(\sigma_{11}\delta\kappa_{11k}+\sigma_{22}\delta\kappa_{22k}
+  +2\sigma_{12}\delta\kappa_{12k}\big)x_k\dd V=\delta\bkap\cdot\bm D\!\int\!\bm m(\bsig,\bx)\dd V,
+\end{equation}
+$\bm D=\operatorname{diag}(1,1,1,1,2,2)$, $\bm m$ the moment vector of \eqref{eq:Qm}. For a
+second-gradient continuum with local stress $\bsig_{(\gamma)}$ and double stress $\bmu$ the internal
+virtual work of the same field is $\delta\bkap\cdot\big(\bm D\int\bm m(\bsig_{(\gamma)},\bx)+\int\bmu\big)$.
+Equating both for all $\delta\bkap$ gives (\code{doubleStressModel='local+mu'})
+\begin{equation}
+  \boxed{\ \bm D\!\int\!\bm m(\bsig_{(\gamma)},\bx)\dd V+\ell^2G\,[I_7,\dots,I_{12}]^T=\bm D\,\bm M_{\mathrm{FE}}\ }
+  \label{eq:eqM}
+\end{equation}
+with the local part
+\begin{equation}
+  \bm D\!\int\!\bm m(\bsig_{(\gamma)},\bx)=
+  \begin{bmatrix}
+  \bar C_{11}I_{19}+\bar C_{12}I_{21}+\hat C_{11}I_{13}+\hat C_{12}I_{15}\\
+  \bar C_{11}I_{20}+\bar C_{12}I_{22}+\hat C_{11}I_{14}+\hat C_{12}I_{16}\\
+  \bar C_{12}I_{19}+\bar C_{11}I_{21}+\hat C_{12}I_{13}+\hat C_{11}I_{15}\\
+  \bar C_{12}I_{20}+\bar C_{11}I_{22}+\hat C_{12}I_{14}+\hat C_{11}I_{16}\\
+  4\bar C_{33}I_{23}+4\hat C_{33}I_{17}\\
+  4\bar C_{33}I_{24}+4\hat C_{33}I_{18}
+  \end{bmatrix}.
+  \label{eq:eqMloc}
+\end{equation}
+(\code{'mu'} keeps only $\ell^2G[I_7..I_{12}]$ on the left.) With \code{Gmode='three'},
+\[
+  \int\bmu=\ell^2[G_{11}I_7,\ G_{22}I_8,\ G_{22}I_9,\ G_{11}I_{10},\ G_{33}I_{11},\ G_{33}I_{12}]^T .
+\]
+
+\subsection*{Step 10.4 -- Scaling, weights and informative groups}
+Each group is divided by its own size and weighted:
+\begin{equation}
+  \text{energy: }\frac{\sqrt{w_E}}{2U_{\mathrm{het}}},\qquad
+  \text{stress: }\frac{\sqrt{w_S}}{\|\bm S_{\mathrm{FE}}\|},\qquad
+  \text{double stress: }\frac{\sqrt{w_D}}{\|\bm D\bm M_{\mathrm{FE}}\|}.
+\end{equation}
+A stress or double-stress group enters only if it carries information,
+\begin{equation}
+  \|\bm S_{\mathrm{FE}}\|\ge\tau\,\sigma_{\mathrm{ref}},\qquad
+  \|\bm D\bm M_{\mathrm{FE}}\|\ge\tau\,\sigma_{\mathrm{ref}}L_{r,\mathcal R},\qquad
+  \sigma_{\mathrm{ref}}=\sqrt{\frac{2U_{\mathrm{het}}\,\lambda_{\max}(\C)}{V_{\mathcal R}}}\;V_{\mathcal R},
+  \label{eq:info}
+\end{equation}
+$\tau=10^{-2}$. Stacking all groups of all load cases gives the linear least-squares system
+\begin{equation}
+  \bP(N)\,\bth\approx\bb(N).
+  \label{eq:system}
+\end{equation}
+\begin{delivers}
+Rows $\bP(N)$ and right-hand sides $\bb(N)$ for every $N$, labelled by channel (energy, stress,
+double stress).
+\end{delivers}
+
+% ==================================================================
+\section{Stage 11 -- Solution: monotone in $N$, energy positive definite (default)}
+\label{sec:stage11}
+% ==================================================================
+\implementedin{\code{solveMonotone}, \code{monoObjective}, \code{monoNonlcon} (\code{cfg.id.mode='monotone'})}
+
+\subsection*{Step 11.1 -- Parameters as functions of $N$}
+Every parameter is represented as
+\begin{equation}
+  \theta_j(N)=\sum_{k=1}^{n_b}c_{jk}N^{-e_k},\qquad c_{jk}\ge0,\qquad \bm e=(0,1,2),
+  \label{eq:mono}
+\end{equation}
+hence positive and non-increasing in $N$ (Lemma of Stage 9 with $p=0$ allowed), with limit
+$c_{j1}$ for $N\to\infty$. With $\bm\beta(N)=[N^{-e_1},\dots,N^{-e_{n_b}}]$ and the
+parameter-major coefficient vector $\bm c$,
+\begin{equation}
+  \bth(N)=\bm T(N)\bm c,\qquad \bm T(N)=\bm I_{n_p}\otimes\bm\beta(N),
+\end{equation}
+and the stacked system over all $N\in\Nset_s$ is $\tilde\bP\bm c\approx\tilde\bb$,
+$\tilde\bP=[\bP(N)\bm T(N)]_N$. Columns are scaled, $\bm c=\bm S\bm x$,
+$S_{jj}=1/\max\big(\max_i|\tilde P_{ij}|,\ 10^{-6}\max_{ij}|\tilde P_{ij}|\big)$.
+
+\subsection*{Step 11.2 -- Constraints at every $N$}
+With the mode values of Step 0.3 as linear functions of $\bm c$,
+$\hat c_i(N)=\bm u_i(N)^T\bm c$, $\bar c_i(N)=\bm v_i(N)^T\bm c$, margin
+$m=\delta\,\lambda_{\max}(\C)$, $\delta=$\code{pdMargin}$=10^{-3}$:
+\begin{align}
+  &\hat c_i(N)\ge m &&(\Ch\succ0,\ \text{linear}), \label{eq:conlin}\\
+  &\frac{\hat c_i(N)^2}{(1-\delta)\,c_i}-\bar c_i(N)\le0 &&(\B\succ0,\ \text{Prop.~\ref{prop:pd}},\ \text{convex}),
+  \label{eq:connl}\\
+  &\bm c\ge\bm0 &&(\text{positive, non-increasing}),
+\end{align}
+for $i=1,2,3$ and all $N\in\Nset_s$. \eqref{eq:connl} is the convex quadratic epigraph
+$(\bm u_i^T\bm c)^2\le(1-\delta)c_i\,\bm v_i^T\bm c$ and implies $\bar c_i\ge\hat c_i^2/c_i>0$.
+Without \code{energyPD}, \eqref{eq:connl} is replaced by the linear $\bar c_i(N)\ge m$.
+
+\subsection*{Step 11.3 -- Convex optimization problem}
+\begin{equation}
+  \min_{\bm x\ge\bm0}\ J(\bm x)=\tfrac12\|\tilde\bP\bm S\bm x-\tilde\bb\|^2
+  \quad\text{s.t.}\quad\eqref{eq:conlin},\ \eqref{eq:connl},
+  \label{eq:monoopt}
+\end{equation}
+a convex quadratic program with convex quadratic constraints: every local minimum is global.
+Gradients supplied to the solver:
+\begin{equation}
+  \nabla J=\bm S\tilde\bP^T(\tilde\bP\bm S\bm x-\tilde\bb),\qquad
+  \nabla_{\bm x}\Big[\frac{(\bm u_i^T\bm S\bm x)^2}{(1-\delta)c_i}-\bm v_i^T\bm S\bm x\Big]
+  =\frac{2\,\bm u_i^T\bm S\bm x}{(1-\delta)c_i}\bm S\bm u_i-\bm S\bm v_i .
+\end{equation}
+Start point (feasible): $\Ch=\C$, $\Cb=2\C$, $G=10^{-3}\lambda_{\max}(\C)$ on the lowest exponent.
+Solver: \code{fmincon} (SQP) in MATLAB, \code{sqp} in Octave.
+
+\subsection*{Step 11.4 -- Post-processing}
+Coefficients below $10^{-10}\max|c_{jk}|$ are set to zero (bound $c\ge0$ at round-off); a parameter
+with $c_{jk}=0$ for all $e_k>0$ is reported as constant in $N$. For every $N$:
+$\bth(N)=\bm T(N)\bm c$; channel misfits
+\begin{equation}
+  \mathrm{RMS}_q(N)=\Big(\frac1{n_q}\sum_{i\in q,N}\frac{r_i^2}{w_q}\Big)^{1/2},\qquad
+  \bm r=\tilde\bP\bm c-\tilde\bb ;
+\end{equation}
+and $\lambda_{\min}(\Cb)$, $\lambda_{\min}(\Ch)$, $\lambda_{\min}(\B)$, reported relative to
+$\lambda_{\max}(\C)$.
+\begin{delivers}
+$\bth(N)$ for every $N$, the closed form $\theta_j(N)=c_{j1}+c_{j2}/N+c_{j3}/N^2$, channel misfits,
+eigenvalue checks, constant-in-$N$ parameters (\code{IdentifiedCbarChatG.mat}, \code{.csv}).
+\end{delivers}
+
+% ==================================================================
+\section{Stage 12 -- Solution: free per $N$ and global (comparison)}
+\label{sec:stage12}
+% ==================================================================
+\implementedin{\code{solveBlock}, \code{pdConstraints}, \code{qpActiveSet}, \code{fitTrends}}
+
+\subsection*{Step 12.1 -- Linearly constrained least squares}
+For one $N$ (\code{'perN'}) or all $N$ together with one $\bth$ (\code{'global'}):
+\begin{equation}
+  \min_{\bth}\tfrac12\|\bP\bth-\bb\|^2\quad\text{s.t.}\quad \bm G_c\bth\ge\bm h,
+  \label{eq:qp}
+\end{equation}
+with the rows $\bar C_{11}\pm\bar C_{12}\ge m$, $\bar C_{33}\ge m$ ($\Cb\succ0$),
+$\hat C_{11}\pm\hat C_{12}\ge m$, $\hat C_{33}\ge m$ ($\Ch\succ0$), $G\ge0$. Columns are scaled as
+in Step 11.1 and constraint rows normalized to unit length.
+
+\subsection*{Step 12.2 -- Exact solution by active-set enumeration}
+If the unconstrained minimizer $\bth^\ast=\bP^+\bb$ is feasible it is the solution. Otherwise,
+since \eqref{eq:qp} is a convex QP, its optimum is the equality-constrained minimizer of its own
+active set $\mathcal A$; for every $\mathcal A\subseteq\{1,\dots,n_c\}$ the KKT system
+\begin{equation}
+  \begin{bmatrix}\bP^T\bP&\bm G_{\mathcal A}^T\\\bm G_{\mathcal A}&\bm0\end{bmatrix}
+  \begin{bmatrix}\bth\\\bm\lambda\end{bmatrix}=
+  \begin{bmatrix}\bP^T\bb\\\bm h_{\mathcal A}\end{bmatrix}
+\end{equation}
+is solved (pseudo-inverse), and the feasible candidate with the smallest $J$ is the global optimum
+($2^{n_c}-1\le511$ systems). Parameters seen by no equation are reported as ``no information''.
+Optionally (\code{requireEnergyPD}) $\lambda_{\min}(\B)\ge m$ is added and solved by \code{fmincon}.
+
+\subsection*{Step 12.3 -- Trend and $N$-dependence of the free values}
+Each free value is fitted by $\theta_j(N)\approx c_0+c_1N^{-1}\,(+c_2N^{-2}$ with $\ge5$ values
+of $N)$, and its scaling exponent is estimated by
+\begin{equation}
+  (s_j,b_j)=\arg\min\sum_N\big(\log\theta_j(N)-s\log N-b\big)^2,
+\end{equation}
+$s_j\approx0$ indicating an $N$-independent (material) constant.
+\begin{delivers}
+Free $\bth(N)$ per $N$, the global $\bth$, trends and exponents $s_j$ (printed next to the monotone
+result for comparison).
+\end{delivers}
+
+% ==================================================================
+\section{Stage 13 -- Outputs and diagnostic plots}
+\label{sec:stage13}
+% ==================================================================
+
+\subsection*{Step 13.1 -- Parameter and fit plots}
+\implementedin{\code{plotMonotone}, \code{plotFit}}
+$\Cb(N)/\C$, $\Ch(N)/\C$ (componentwise), $G(N)$, and $\lambda_{\min}$ of $\Cb$, $\Ch$, $\B$ versus
+$N$; per channel the scaled residuals versus $N$ and model--FE scatter plots of the stress and
+double-stress components.
+
+\subsection*{Step 13.2 -- Data check: $A_1\dots A_{19}$ per load case}
+\implementedin{\code{plotAterms} (one PNG per load case and region)}
+Each panel shows raw and smoothed $A_j$ versus $N$, normalized by the macroscopic reference of the
+same component pair:
+\begin{equation}
+  \frac{A_j}{A^M_{\rho(j)}},\qquad
+  \rho=(1,2,3,4,\ 1,2,3,4,\ 1,2,2,3,4,\ 14,\dots,19),
+\end{equation}
+e.g.\ $A_1/\int\varepsilon_{M11}^2=C_{11}A_1/\int\varepsilon_{M11}C_{11}\varepsilon_{M11}$. For
+$\bpsi=\epsM$ the ratio is $1$ for $j\le4$ and $j\ge14$ and $0$ for the $\gamma$-terms. The ratio
+is used only where the reference is physically relevant,
+\begin{equation}
+  \frac{c^{\mathrm{ref}}_{\rho(j)}\,|A^M_{\rho(j)}|}{2U_{\mathrm{hom}}}\ge10^{-2}\ (j\le13),\qquad
+  \frac{\ell^2C_{11}A^M_j}{2U_{\mathrm{hom}}}\ge10^{-6}\ \text{and}\ A^M_j\ge10^{-3}\!\sum_{i=14}^{19}\!A^M_i\ (j\ge14),
+\end{equation}
+$c^{\mathrm{ref}}=(C_{11},2|C_{12}|,C_{22},4C_{33})$; otherwise (e.g.\ $\varepsilon_{M11}\equiv0$ under
+$H_{22}$, $\varepsilon_{M22}$ a mere equilibrium correction under $G_{1,22}$, $\bkap_M\equiv\bm0$ under
+pure $\bH$) the energy fraction $c_jA_j/2U_{\mathrm{hom}}$ is shown, $c_j$ being the weight of
+$A_j$ in \eqref{eq:Wcomp} with $\Cb=\Ch=\C$ (curvature terms: $\ell^2C_{11}$).
+
+\noindent Expected behaviour for $N\to\infty$: $\gamma\gamma$-terms decrease to $0$; the
+$\psi\gamma$-terms tend to $0$ in magnitude (negative values rise to $0$); the $\psi\psi$-ratios tend
+to $1$ from either side; the $\kappa\kappa$-ratios need not be monotone ($\int\kappa^2$ of a boundary
+layer grows $\propto N$), only $\ell^2A_j$ decreases.
+\begin{delivers}
+\code{Params\_vsN\_monotone}, \code{Fit\_monotone}, and
+\code{<region>/A\_terms/<case>\_A.png} for every load case.
+\end{delivers}
+
+% ==================================================================
+\section{Stage 14 -- Consistency properties and checks}
+\label{sec:stage14}
+% ==================================================================
+
+\begin{proposition}[Vanishing integrals by symmetry]
+\label{prop:sym}
+Let the region be centred at $\bX_c$ and $\Zset$ symmetric. Then $\bm S_{\mathrm{FE}}=\bm0$ for pure
+second-gradient loads ($\bH=\bm0$) and $\bm M_{\mathrm{FE}}=\bm0$ for pure first-gradient loads
+($\bG=\bm0$).
+\end{proposition}
+\begin{proof}
+The point reflection $\bx\mapsto-\bx$ maps the microstructure of shift $\bm\zeta$ onto that of
+$-\bm\zeta$ (the centres \eqref{eq:centres} form a symmetric set). For $\bH=\bm0$ the data
+\eqref{eq:kubc} are even, so $\bu^{(-\bm\zeta)}(\bx)=\bu^{(\bm\zeta)}(-\bx)$ and
+$\bsig^{(-\bm\zeta)}(\bx)=-\bsig^{(\bm\zeta)}(-\bx)$: the pair's stress integrals cancel. For
+$\bG=\bm0$ the data are odd, $\bsig^{(-\bm\zeta)}(\bx)=\bsig^{(\bm\zeta)}(-\bx)$, and the odd
+moment arm cancels the first moments.
+\end{proof}
+\noindent Hence the stress channel is informative only for load cases with $\bH\ne\bm0$ and the
+double-stress channel only for $\bG\ne\bm0$ (criterion \eqref{eq:info}); this is why the library
+\code{H3G16} contains the three $H$ cases.
+
+\begin{proposition}[Homogeneous material]
+\label{prop:hom}
+If $\Dm\equiv\C$, then $\bpsi=\epsM$, $\bgam=\bm0$, $\bkap=\bkap_M$, and $\Ch=\C$, $G=0$ satisfy
+\eqref{eq:eqE}--\eqref{eq:eqM} exactly for any $\Cb$ ($\Cb$ is not identifiable).
+\end{proposition}
+\begin{proof}
+All $A_5\dots A_{13}$, $I_4\dots I_6$, $I_{19}\dots I_{24}$ vanish; \eqref{eq:eqE} reduces to
+$\int\epsM^T\C\epsM=2U_{\mathrm{het}}$, \eqref{eq:eqS} to $\C\int\ve{\epsM}=\bm S_{\mathrm{FE}}$ and
+\eqref{eq:eqM} to $\bm D\int\bm m(\C\ve{\epsM},\bx)=\bm D\bm M_{\mathrm{FE}}$ with $G=0$.
+\end{proof}
+
+\paragraph{Numerical checks performed by the code.}
+\begin{itemize}[leftmargin=1.2em]
+\item PBC: recovered average strain equals the prescribed one ($<10^{-8}$).
+\item Quadrature: $\int\epsM^T\C\epsM$ (grid) vs.\ $2U_{\mathrm{hom}}$ (FE), $\sim10^{-3}$.
+\item Local gradient exact for affine fields (Lemma~\ref{lem:mls}); region weights reproduce the
+trapezoidal rule and exact box areas.
+\item Monotone solution: $\lambda_{\min}(\B)\ge m$ at every $N$, coefficients $\ge0$.
+\end{itemize}
+
+% ==================================================================
+\appendix
+\section{Default settings}
+% ==================================================================
+\begin{center}\small
+\begin{longtable}{@{}lll@{}}
+\toprule
+symbol / field & default & meaning\\
+\midrule
+$L_x=L_y$ & $1$ & specimen size\\
+$\mathcal N$ (\code{Nlist}) & $1,\dots,8$ & unit cells per side\\
+$r$ (\code{Rfrac}) & $6/19$ & inclusion radius / cell size\\
+$h/\ell$, $h_{\C}/L$ & $0.05$, $0.02$ & element size (heterogeneous; Stage 1 and PBC)\\
+$E_m,\nu_m$; $E_i,\nu_i$ & $70000, 0.33$; $3500, 0.33$ & phases (plane strain)\\
+$\varepsilon_0$, $g$ & $0.01$, $2$ & load amplitude, gradient scale\\
+library & \code{H3G16} & 19 load cases\\
+$n$ (\code{nPeriod}) & $8$ & shifts per direction, $n^2$ solves per $N$\\
+$n_g$, $n_{\mathrm{cell}}$ & $121$, $40$ & grid points per side (minimum, per cell)\\
+\code{kappaMethod}, $w_\sigma$ & \code{'local'}, $0.1$ & $\nabla\epsM$ exact $-$ MLS $\nabla\bgam$, $\sigma=w_\sigma\ell$\\
+$\beta$ (\code{interiorBand}) & $0.5$ & interior band in cells\\
+regions & full, interior & identified separately\\
+$N_{\min}$ & $1$ & smallest $N$ used\\
+$\mathcal P_d$, $\mathcal P_f$ & $\{\tfrac12,1,\tfrac32,2\}$, $\{0,1,2\}$ & smoothing exponents\\
+mode & \code{'monotone'} & Stage 11 (per-$N$ free fit for comparison)\\
+\code{Gmode} & \code{'single'} & $G_{11}=G_{22}=G_{33}$\\
+$\bm e$ & $(0,1,2)$ & exponents of $\theta_j(N)$\\
+$w_E,w_S,w_D$ & $1,1,1$ & channel weights\\
+\code{doubleStressModel} & \code{'local+mu'} & \eqref{eq:eqM}\\
+$\tau$ & $10^{-2}$ & informativeness threshold\\
+$\delta$ (\code{pdMargin}) & $10^{-3}$ & positive-definiteness margin\\
+\code{energyPD} & true & $\B\succ0$ at every $N$\\
+\bottomrule
+\end{longtable}
+\end{center}
+
+% ==================================================================
+\section{Algorithm}
+% ==================================================================
+\begin{algorithm}[h]
+\caption{Identification of $\Cb(N)$, $\Ch(N)$, $G(N)$}
+\begin{algorithmic}[1]
+\Require load cases $\Kset$, cell numbers $\Nset$, material, settings
+\State $\C\gets$ periodic homogenization of one unit cell \Comment{Stage 2}
+\State solve the plain domain with $\C$ under KUBC $\to\epsM^{(k)}$, $2U^{(k)}_{\mathrm{hom}}$ \Comment{Stage 5}
+\For{$N\in\Nset$}
+  \For{$\bm\zeta\in\Zset$} \Comment{Stage 6}
+    \State mesh, assemble $\bK$, solve all $k$; accumulate $\eps$ on the grid, $\bu^T\bK_r\bu$, $\bm Q_s\bu$, $\bm Q_m\bu$
+  \EndFor
+  \State $\bpsi^{(k)}$, $2U_{\mathrm{het}}$, $\bm S_{\mathrm{FE}}$, $\bm M_{\mathrm{FE}}$ (both regions)
+  \State $\bgam=\epsM-\bpsi$, $\bkap=\nabla\epsM-\nabla_\sigma\bgam$, $\bkap_M=\nabla\epsM$ \Comment{Stage 7}
+  \State $A_{1..19}$, $I_{1..24}$, $A^M$ for both regions \Comment{Stage 8}
+\EndFor
+\For{region $\in\{\text{full},\text{interior}\}$}
+  \State smooth every density over $N$ (Table~\ref{tab:smooth}) \Comment{Stage 9}
+  \State assemble \eqref{eq:eqE}--\eqref{eq:eqM} for all informative groups \Comment{Stage 10}
+  \State solve \eqref{eq:monoopt} $\to$ $c_{jk}$, $\bth(N)$ \Comment{Stage 11}
+  \State free per-$N$ and global solutions, exponents $s_j$ \Comment{Stage 12}
+  \State plots and one PNG per load case \Comment{Stage 13}
+\EndFor
+\Ensure $\bth(N)=[\bar C_{11},\bar C_{12},\bar C_{33},\hat C_{11},\hat C_{12},\hat C_{33},G](N)$ per region
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}
